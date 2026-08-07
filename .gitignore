@@ -1,0 +1,15 @@
+# Identidad NATS generada por nats/bootstrap.sh: operator, cuentas, signing keys, creds y
+# la XKey del callout. NUNCA commitear — son las claves que firman los User JWT.
+/nats/out/
+
+# Datos de JetStream (los buckets de KV).
+/nats/data/
+
+# Config local.
+/nats/.env
+
+# Binarios.
+/bin/
+
+# Credenciales de service users descargadas de Zitadel.
+/secrets/

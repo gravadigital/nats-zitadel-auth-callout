@@ -1,0 +1,46 @@
+# PoC — PERSONA con rol `poc-user` (permisos acotados)
+#
+# GRAMÁTICA
+#   <instancia>.<session>.<svc>.<method>
+#     instancia  despliegue (dev/stage/prod)
+#     session    QUIÉN llama. Persona: hash estable de su `sub`. Servicio: su nombre.
+#     svc        A QUIÉN le habla (en la PoC solo `demo`)
+#     method     QUÉ le pide
+#
+# PLACEHOLDERS: {{instance}}, {{session}}, {{service}} (el último solo en servicios).
+#
+# QUÉ DEMUESTRA ESTA PLANTILLA
+#   Frente a poc-person-admin.yaml, el MISMO servicio y los MISMOS buckets, con permisos
+#   distintos según el rol:
+#     - mensajes: solo dos métodos (no `admin_reset`)
+#     - KV:       solo su propia clave (no las de otros)
+#   Y frente a las dos, poc-service.yaml muestra el otro tipo de identidad.
+
+pub:
+  allow:
+    # Allow-list explícita: `admin_reset` NO está, así que no lo alcanza. Con una
+    # deny-list, un método nuevo quedaría accesible hasta que alguien lo restrinja; así,
+    # no lo alcanza nadie hasta habilitarlo.
+    - "{{instance}}.{{session}}.demo.ping"
+    - "{{instance}}.{{session}}.demo.echo"
+
+sub:
+  allow:
+    # Inbox privado. El cliente DEBE fijar este prefijo al conectar
+    # (nats.CustomInboxPrefix en Go, inboxPrefix en nats.js, --inbox-prefix en el CLI):
+    # por defecto la librería genera un _INBOX.<aleatorio> que ningún permiso acotado
+    # autoriza, y la respuesta nunca llega.
+    - "_INBOX.{{session}}.>"
+
+kv:
+  # Escribe y lee SOLO bajo su propia sesión. El scoping entra en el subject de la clave,
+  # así que lo aplica el servidor NATS, no la aplicación.
+  - bucket: poc-kv
+    access: read-write
+    keys: "{{session}}.>"
+
+response:
+  # allow_responses: deja que el servicio conteste al inbox del caller sin necesitar un
+  # permiso de pub explícito hacia ese inbox.
+  max: 1
+  ttl: 45s

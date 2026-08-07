@@ -1,0 +1,46 @@
+# PoC — SERVICE USER con rol `poc-service` (el servicio `demo`)
+#
+# Gramática: <instancia>.<session>.<svc>.<method>
+#   Para un servicio, `session` es su propio nombre: {{service}} == "demo".
+#
+# QUÉ DEMUESTRA
+#   El otro tipo de identidad. Un servicio no tiene sesión derivada de un `sub`: su sesión
+#   es su nombre, legible en los subjects y compartida entre réplicas a propósito (es lo que
+#   permite balancear con queue groups).
+#
+# CÓMO ATIENDE
+#   Se suscribe a `<instancia>.*.demo.>`: el `*` cubre la sesión de CUALQUIER caller. La
+#   sesión de quien llamó viene en el subject del mensaje, avalada por el callout — el
+#   servicio la lee de ahí y no del cuerpo. Eso es lo que impide que un cliente se haga
+#   pasar por otro: el subject lo fija el permiso, no la aplicación.
+
+pub:
+  allow:
+    # Requests salientes bajo su propia identidad. En la PoC no hay otro servicio al que
+    # llamar; queda declarado porque es la forma del permiso en un despliegue real.
+    - "{{instance}}.{{service}}.>"
+
+sub:
+  allow:
+    # Atender los requests dirigidos a su endpoint, de cualquier caller.
+    - "{{instance}}.*.{{service}}.>"
+    # Inbox propio (respuestas de los servicios que llame).
+    - "_INBOX.{{service}}.>"
+
+kv:
+  # Dueño del bucket de la prueba: `manage: true` es lo que lo habilita a CREARLO. Todo
+  # bucket necesita exactamente un servicio con manage, o no hay quién lo cree y las
+  # operaciones de datos fallan con "stream not found" sin explicar por qué.
+  #
+  # `manage` es un eje SEPARADO de `access`: se puede administrar un bucket sin poder leer
+  # lo que hay adentro (access: none) o, como acá, administrarlo y además operarlo.
+  - bucket: poc-kv
+    access: read-write
+    manage: true
+    keys: ">"
+    watch: true
+
+response:
+  # Responder los requests que atiende.
+  max: 1
+  ttl: 45s

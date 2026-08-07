@@ -1,0 +1,44 @@
+# rules.yaml — PRUEBA DE CONCEPTO: rol de Zitadel -> (tipo de identidad, plantilla)
+#
+# Alcance deliberado: subjects de EJEMPLO, no el mapeo real de gestión. Lo que se valida
+# acá es el mecanismo —que el rol y el tipo de usuario cambien los permisos, en mensajes y
+# en KV— no el dominio. Los subjects definitivos se definen cuando exista el contrato del
+# BFF sobre el bus.
+#
+# Hay UN servicio de ejemplo (`demo`) con tres métodos: ping, echo y admin_reset.
+#
+# CÓMO SE EVALÚA
+#   Se recorren las reglas EN ORDEN y gana la PRIMERA cuyo `match` coincida con algún rol
+#   del token. Sin coincidencia, la conexión se RECHAZA: no hay permisos por defecto, y la
+#   PoC lo prueba (un token sin rol conocido no conecta).
+#
+# EL ROL ES LO ÚNICO QUE DECIDE
+#   No hay heurística que adivine si un token es de una persona o de un servicio: lo
+#   declara `type`, y el rol lo asigna quien administra Zitadel.
+#
+#   Consecuencia práctica para la prueba: da igual si el token viene de un usuario humano o
+#   de un machine user. Un machine user con el rol `poc-user` entra por el camino de
+#   persona y recibe identidad de persona. Es lo que permite validar los tres caminos sin
+#   pasar por un login de browser.
+
+version: 1
+
+rules:
+  # Persona con permisos amplios: todos los métodos de `demo`, y lectura de todo el KV.
+  - match: poc-admin
+    type: person
+    template: templates/poc-person-admin.yaml
+
+  # Persona con permisos acotados: solo dos métodos, y en KV solo su propia clave.
+  - match: poc-user
+    type: person
+    template: templates/poc-person.yaml
+
+  # Service user: atiende el endpoint `demo` y es dueño del bucket de la prueba.
+  - match: poc-service
+    type: service
+    service: demo
+    template: templates/poc-service.yaml
+
+  # SIN catch-all: un token válido de Zitadel pero con un rol que no está acá NO conecta.
+  # Es parte de lo que la prueba verifica.
