@@ -1,31 +1,36 @@
 # PoC — SERVICE USER con rol `poc-service` (el servicio `demo`)
 #
-# Gramática: <instancia>.<session>.<svc>.<method>
-#   Para un servicio, `session` es su propio nombre: {{service}} == "demo".
+# Gramática: <instancia>.<user-id>.<svc>.<method>
 #
 # QUÉ DEMUESTRA
-#   El otro tipo de identidad. Un servicio no tiene sesión derivada de un `sub`: su sesión
-#   es su nombre, legible en los subjects y compartida entre réplicas a propósito (es lo que
-#   permite balancear con queue groups).
+#   Que IDENTIDAD y ENDPOINT son dos cosas distintas. Un service user también es un usuario
+#   de Zitadel: tiene su propio `sub`, y ese es su {{user_id}} igual que para una persona.
+#   Lo que lo hace un servicio es tener además un NOMBRE de endpoint ({{service}} == "demo"),
+#   que es por donde lo llaman.
+#
+#   La consecuencia práctica: varias réplicas del mismo servicio comparten el endpoint
+#   —es lo que permite balancear con queue groups— aunque cada una conecte con su user id.
 #
 # CÓMO ATIENDE
-#   Se suscribe a `<instancia>.*.demo.>`: el `*` cubre la sesión de CUALQUIER caller. La
-#   sesión de quien llamó viene en el subject del mensaje, avalada por el callout — el
-#   servicio la lee de ahí y no del cuerpo. Eso es lo que impide que un cliente se haga
+#   Se suscribe a `<instancia>.*.demo.>`: el `*` cubre el user id de CUALQUIER caller. El
+#   user id de quien llamó viene en el subject del mensaje, avalado por el callout — el
+#   servicio lo lee de ahí y no del cuerpo. Eso es lo que impide que un cliente se haga
 #   pasar por otro: el subject lo fija el permiso, no la aplicación.
 
 pub:
   allow:
     # Requests salientes bajo su propia identidad. En la PoC no hay otro servicio al que
     # llamar; queda declarado porque es la forma del permiso en un despliegue real.
-    - "{{instance}}.{{service}}.>"
+    - "{{instance}}.{{user_id}}.>"
 
 sub:
   allow:
     # Atender los requests dirigidos a su endpoint, de cualquier caller.
     - "{{instance}}.*.{{service}}.>"
-    # Inbox propio (respuestas de los servicios que llame).
-    - "_INBOX.{{service}}.>"
+    # Inbox propio (respuestas de los servicios que llame), bajo el hash de su user id
+    # igual que una persona. Es POR RÉPLICA, no por endpoint: dos réplicas con distinto
+    # service user no se roban las respuestas.
+    - "_INBOX.{{user_id_hash}}.>"
 
 kv:
   # Dueño del bucket de la prueba: `manage: true` es lo que lo habilita a CREARLO. Todo

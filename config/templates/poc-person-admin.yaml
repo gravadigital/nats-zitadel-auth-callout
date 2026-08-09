@@ -6,16 +6,16 @@
 #   mensajes  todos los métodos de `demo` (incluido admin_reset), no solo dos
 #   KV        lee TODO el bucket; escribe solo lo suyo
 #
-# Un rol amplio NO es superusuario de NATS: sigue acotado a su propia sesión, así que no
+# Un rol amplio NO es superusuario de NATS: sigue acotado a su propio user id, así que no
 # puede publicar haciéndose pasar por otro ni leer el inbox de nadie.
 
 pub:
   allow:
-    - "{{instance}}.{{session}}.demo.>"
+    - "{{instance}}.{{user_id}}.demo.>"
 
 sub:
   allow:
-    - "_INBOX.{{session}}.>"
+    - "_INBOX.{{user_id_hash}}.>"
 
 kv:
   # Dos entradas sobre el MISMO bucket, con alcances distintos: lectura completa y
@@ -27,7 +27,7 @@ kv:
 
   - bucket: poc-kv
     access: read-write
-    keys: "{{session}}.>"
+    keys: "{{user_id}}.>"
 
 response:
   max: 1

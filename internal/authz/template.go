@@ -90,8 +90,8 @@ type KVAccess struct {
 	// "stream not found" sin decir por qué.
 	Manage bool `yaml:"manage"`
 	// Keys acota QUÉ claves alcanza el permiso, como patrón de subject NATS relativo
-	// al bucket. Admite placeholders: `{{session}}.>` deja al caller operar solo bajo
-	// su propia sesión. Default `>` (todas).
+	// al bucket. Admite placeholders: `{{user_id}}.>` deja al caller operar solo bajo
+	// su propio user id. Default `>` (todas).
 	Keys string `yaml:"keys"`
 	// Watch habilita Watch()/Keys(), que crean un consumer efímero sobre el bucket.
 	// Va aparte porque no se puede acotar por clave: un watcher ve todo el bucket.
@@ -129,7 +129,7 @@ func LoadTemplate(path string) (*Template, error) {
 	}
 	// Dry-run de expansión: detecta placeholders desconocidos, buckets vacíos,
 	// niveles de acceso inválidos y subjects malformados antes de servir tráfico.
-	probe := Identity{Instance: "probe", Session: "probe", Service: "probe"}
+	probe := Identity{Instance: "probe", UserID: "probe", Service: "probe"}
 	if _, err := t.Expand(probe); err != nil {
 		return nil, fmt.Errorf("authz: validar plantilla %q: %w", path, err)
 	}
@@ -219,7 +219,7 @@ const jsAccountInfoSubject = "$JS.API.INFO"
 //	Watch/Keys     pub  $JS.API.CONSUMER.CREATE.KV_<b>.>
 //
 // Que el direct-get lleve la clave DENTRO del subject es lo que hace posible acotar la
-// lectura por clave — y por lo tanto por usuario, vía el placeholder {{session}}.
+// lectura por clave — y por lo tanto por usuario, vía el placeholder {{user_id}}.
 func (k KVAccess) subjects(vars map[string]string) (pub, sub []string, err error) {
 	if k.Bucket == "" {
 		return nil, nil, ErrEmptyBucket

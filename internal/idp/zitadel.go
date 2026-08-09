@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lestrrat-go/jwx/v2/jwk"
@@ -27,13 +28,39 @@ const (
 )
 
 // jwksRefreshInterval es cada cuánto se refresca el JWKS de Zitadel en background.
-// El cache también refresca on-demand ante un `kid` desconocido (rotación de claves),
-// así que este intervalo es solo el piso de frescura.
+//
+// Es un PISO, no el intervalo exacto: httprc usa el `max-age` de la respuesta si es mayor.
+// Con Zitadel da igual —responde `cache-control: no-store` y un `expires` en el pasado, así
+// que no hay `max-age` del que agarrarse y este valor es el intervalo real.
+//
+// Por sí solo este refresco NO alcanza ante una rotación: entre que Zitadel empieza a firmar
+// con una clave nueva y el refresco siguiente, los tokens con esa `kid` se rechazan. Lo que
+// cierra esa ventana es el refetch on-demand de refreshForUnknownKey.
 const jwksRefreshInterval = 15 * time.Minute
+
+// jwksRefetchCooldown es lo mínimo entre dos refetch on-demand disparados por una `kid`
+// desconocida.
+//
+// Sin este freno, un token con una `kid` inventada fuerza un GET al JWKS de Zitadel por
+// intento — y eso pasa ANTES de autenticar, así que cualquiera puede dispararlo. Sería
+// convertir el callout en un amplificador de tráfico contra el IdP.
+//
+// Un minuto es holgado para lo que tiene que resolver: en una rotación real alcanza con UN
+// refetch para incorporar la clave nueva, y a partir de ahí sirve el cache.
+const jwksRefetchCooldown = time.Minute
 
 // userinfoTimeout acota la llamada a /oidc/v1/userinfo. Es un enriquecimiento opcional:
 // si tarda o falla, la autenticación sigue sin username.
 const userinfoTimeout = 3 * time.Second
+
+// errUnknownKeyIDFragment es el fragmento con el que jwx reporta que la `kid` del token no
+// está en el JWKS (jws/key_provider.go). Es la señal de una rotación de claves.
+//
+// Se detecta por texto porque jwx v2 no expone un error tipado para este caso. Es frágil
+// ante un cambio de la librería, y por eso hay un test que falla si el mensaje cambia
+// (TestUnknownKeyIDFragmentSigueVigente): si jwx lo reescribe, el refetch dejaría de
+// dispararse y volveríamos a la ventana de rechazo, en silencio.
+const errUnknownKeyIDFragment = "failed to find key with key ID"
 
 // Zitadel verifica access tokens de Zitadel contra su JWKS.
 //
@@ -50,6 +77,17 @@ type Zitadel struct {
 	// Los tokens de machine user suelen no traerlo, y el nombre es lo que hace legible
 	// un `nats server report connections`.
 	enrichUsername bool
+
+	// now es la fuente de tiempo del cooldown. Existe para que los tests puedan mover el
+	// reloj sin dormir; en producción es time.Now.
+	now func() time.Time
+
+	// mu protege lastRefetch. VerifyToken corre concurrentemente —una vez por conexión
+	// entrante— así que el cooldown es estado compartido.
+	mu sync.Mutex
+	// lastRefetch es cuándo se hizo el último refetch on-demand. El cero significa que
+	// todavía no hubo ninguno.
+	lastRefetch time.Time
 }
 
 // ZitadelOption configura un Zitadel.
@@ -64,6 +102,16 @@ func WithProjectID(projectID string) ZitadelOption {
 // WithUsernameEnrichment activa la consulta a userinfo cuando el token no trae nombre.
 func WithUsernameEnrichment(enabled bool) ZitadelOption {
 	return func(z *Zitadel) { z.enrichUsername = enabled }
+}
+
+// withClock reemplaza la fuente de tiempo del cooldown de refetch. Solo para tests: deja
+// ejercitar el rate limit sin dormir un minuto.
+func withClock(now func() time.Time) ZitadelOption {
+	return func(z *Zitadel) {
+		if now != nil {
+			z.now = now
+		}
+	}
 }
 
 // WithHTTPClient reemplaza el cliente HTTP (para tests o para fijar timeouts/proxy).
@@ -89,6 +137,7 @@ func NewZitadel(ctx context.Context, issuerURL string, opts ...ZitadelOption) (*
 		issuer:         issuerURL,
 		httpClient:     &http.Client{Timeout: 10 * time.Second},
 		enrichUsername: true,
+		now:            time.Now,
 	}
 	for _, opt := range opts {
 		opt(z)
@@ -153,17 +202,24 @@ func (z *Zitadel) discoverJWKS(ctx context.Context) (string, error) {
 }
 
 // VerifyToken valida firma, issuer y vigencia del token, y extrae las claims.
+//
+// Ante una `kid` que no está en el JWKS cacheado —el caso de una rotación de claves en
+// Zitadel— fuerza UN refetch del JWKS y reintenta. Sin eso, los tokens firmados con la
+// clave nueva se rechazan hasta el refresco periódico siguiente (ver jwksRefreshInterval).
 func (z *Zitadel) VerifyToken(ctx context.Context, token string) (*Claims, error) {
 	set, err := z.cache.Get(ctx, z.jwksURL)
 	if err != nil {
 		return nil, fmt.Errorf("idp: obtener JWKS: %w", err)
 	}
 
-	parsed, err := jwt.ParseString(token,
-		jwt.WithKeySet(set, jws.WithInferAlgorithmFromKey(true)),
-		jwt.WithIssuer(z.issuer),
-		jwt.WithValidate(true),
-	)
+	parsed, err := z.parse(token, set)
+	if err != nil && isUnknownKeyID(err) {
+		// La `kid` no está en el cache. Puede ser una rotación (recargar lo arregla) o un
+		// token con una `kid` inventada (recargar no cambia nada, por eso el cooldown).
+		if fresh, ok := z.refreshForUnknownKey(ctx); ok {
+			parsed, err = z.parse(token, fresh)
+		}
+	}
 	if err != nil {
 		// jwx no expone el vencimiento como error tipado, así que se distingue por texto.
 		// Importa porque un token vencido es un caso normal (el cliente debe renovar) y
@@ -196,6 +252,48 @@ func (z *Zitadel) VerifyToken(ctx context.Context, token string) (*Claims, error
 	}
 
 	return claims, nil
+}
+
+// parse valida el token contra un JWKS concreto. Separado de VerifyToken porque se ejecuta
+// dos veces: con el set cacheado y, si la `kid` no estaba, con el set recién traído.
+func (z *Zitadel) parse(token string, set jwk.Set) (jwt.Token, error) {
+	return jwt.ParseString(token,
+		jwt.WithKeySet(set, jws.WithInferAlgorithmFromKey(true)),
+		jwt.WithIssuer(z.issuer),
+		jwt.WithValidate(true),
+	)
+}
+
+// isUnknownKeyID indica si el error es "la `kid` del token no está en el JWKS".
+func isUnknownKeyID(err error) bool {
+	return err != nil && strings.Contains(err.Error(), errUnknownKeyIDFragment)
+}
+
+// refreshForUnknownKey fuerza un refetch del JWKS y devuelve el set nuevo.
+//
+// Devuelve ok=false si el cooldown todavía no venció o si el refetch falló; en ambos casos
+// el llamador se queda con el error original de verificación. Un JWKS que no responde no
+// debe convertirse en un error distinto: para el cliente el resultado es el mismo —su token
+// no verifica— y el error de firma es más honesto que uno de red.
+//
+// El cooldown se marca ANTES de pedir el JWKS, no después: así N conexiones concurrentes con
+// `kid` desconocida disparan un solo fetch y no N. Es lo que hace que el rate limit sirva
+// justo cuando más importa, que es bajo carga.
+func (z *Zitadel) refreshForUnknownKey(ctx context.Context) (jwk.Set, bool) {
+	z.mu.Lock()
+	now := z.now()
+	if !z.lastRefetch.IsZero() && now.Sub(z.lastRefetch) < jwksRefetchCooldown {
+		z.mu.Unlock()
+		return nil, false
+	}
+	z.lastRefetch = now
+	z.mu.Unlock()
+
+	set, err := z.cache.Refresh(ctx, z.jwksURL)
+	if err != nil {
+		return nil, false
+	}
+	return set, true
 }
 
 // extractRoles aplana los roles de proyecto del token a una lista de nombres.

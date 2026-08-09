@@ -185,22 +185,18 @@ func (r *Router) Resolve(roles []string, subject, username string) (Identity, *P
 		return Identity{}, nil, Decision{}, ErrNoRuleMatched
 	}
 
+	// El user id es el `sub` del token, igual para persona y para servicio: los dos son
+	// usuarios de Zitadel. Lo que agrega un servicio es su NOMBRE de endpoint, que es
+	// otra cosa (varias réplicas comparten endpoint a propósito —así NATS balancea con
+	// queue groups— pero cada una conecta con el user id del service user).
 	id := Identity{
 		Instance: r.instance,
 		Type:     rule.Type,
-		Subject:  subject,
+		UserID:   subject,
 		Username: username,
 	}
-
-	switch rule.Type {
-	case UserTypeService:
-		// La sesión de un servicio es su nombre: legible en subjects y en logs, y
-		// estable entre réplicas (varias instancias del mismo servicio comparten
-		// endpoint a propósito — así NATS balancea con queue groups).
+	if rule.Type == UserTypeService {
 		id.Service = rule.Service
-		id.Session = rule.Service
-	case UserTypePerson:
-		id.Session = DeriveSession(subject)
 	}
 
 	// La plantilla se buscó por path en el cache del router, así que acá siempre existe.

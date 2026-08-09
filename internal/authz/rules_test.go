@@ -35,10 +35,10 @@ func writeRules(t *testing.T, rules string, templates map[string]string) string 
 const minimalPersonTemplate = `
 pub:
   allow:
-    - "{{instance}}.{{session}}.api.>"
+    - "{{instance}}.{{user_id}}.api.>"
 sub:
   allow:
-    - "_INBOX.{{session}}.>"
+    - "_INBOX.{{user_id_hash}}.>"
 `
 
 // minimalServiceTemplate es una plantilla de servicio válida.
@@ -154,14 +154,18 @@ rules:
 	if id.Type != UserTypePerson {
 		t.Fatalf("esperaba type person, obtuve %q", id.Type)
 	}
-	if id.Session != DeriveSession("zitadel-user-123") {
-		t.Fatalf("la sesión debe derivarse del sub, obtuve %q", id.Session)
+	if id.UserID != "zitadel-user-123" {
+		t.Fatalf("el user id debe ser el sub del token, obtuve %q", id.UserID)
 	}
-	// El `sub` de Zitadel no debe aparecer en los subjects.
-	for _, subject := range slices.Concat(perms.PubAllow, perms.SubAllow) {
-		if subject == "prod.zitadel-user-123.api.>" {
-			t.Fatalf("el sub crudo no debe aparecer en un subject: %q", subject)
-		}
+	// El user id va CRUDO en los subjects de mensajería: es lo que hace legible el subject
+	// y lo que deja a un servicio saber quién lo llamó leyéndolo.
+	if !slices.Contains(perms.PubAllow, "prod.zitadel-user-123.api.>") {
+		t.Fatalf("esperaba el user id crudo en el subject de pub, obtuve %v", perms.PubAllow)
+	}
+	// El inbox, en cambio, va bajo el hash.
+	wantInbox := "_INBOX." + HashUserID("zitadel-user-123") + ".>"
+	if !slices.Contains(perms.SubAllow, wantInbox) {
+		t.Fatalf("esperaba el inbox %q, obtuve %v", wantInbox, perms.SubAllow)
 	}
 	if id.Username != "ana@grava.io" {
 		t.Fatalf("esperaba el username del token, obtuve %q", id.Username)
@@ -191,20 +195,20 @@ rules:
 	if id.Type != UserTypeService {
 		t.Fatalf("esperaba type service, obtuve %q", id.Type)
 	}
-	// La sesión de un servicio es su nombre, no un hash: tiene que ser legible en el
-	// subject y ser la misma en todas sus réplicas.
-	if id.Session != "jira" || id.Service != "jira" {
-		t.Fatalf("esperaba session=service=jira, obtuve session=%q service=%q", id.Session, id.Service)
+	// Un service user tiene las DOS cosas: su propio user id (el `sub`, igual que una
+	// persona) y el nombre del endpoint que atiende. Son ejes distintos.
+	if id.UserID != "machine-user-9" || id.Service != "jira" {
+		t.Fatalf("esperaba userID=machine-user-9 service=jira, obtuve userID=%q service=%q", id.UserID, id.Service)
 	}
 	assertSubjects(t, "sub allow", perms.SubAllow, []string{"prod.*.jira.>"})
 }
 
 // El modelo de identidad lo decide la REGLA, no la clase de usuario que sea en Zitadel.
 //
-// Un machine user cuyo rol está declarado `type: person` recibe identidad de persona: sesión
-// derivada del `sub`, no el nombre de un servicio. Es intencional —permite ejercitar el camino
-// de persona sin un login interactivo— y es lo que el log reporta como `identity=person`, que
-// se lee raro al lado de un service user si no se sabe esto.
+// Un machine user cuyo rol está declarado `type: person` recibe identidad de persona: sin
+// nombre de servicio, así que no puede atender un endpoint. Es intencional —permite ejercitar
+// el camino de persona sin un login interactivo— y es lo que el log reporta como
+// `identity=person`, que se lee raro al lado de un service user si no se sabe esto.
 func TestIdentityModelComesFromTheRuleNotThePrincipal(t *testing.T) {
 	rulesPath := writeRules(t, `
 version: 1
@@ -228,8 +232,8 @@ rules:
 	if decision.IdentityModel != UserTypePerson || id.Type != UserTypePerson {
 		t.Fatalf("esperaba modelo person, obtuve decision=%q identity=%q", decision.IdentityModel, id.Type)
 	}
-	if id.Session != DeriveSession("385270818583609346") {
-		t.Fatalf("la sesión debe derivarse del sub, obtuve %q", id.Session)
+	if id.UserID != "385270818583609346" {
+		t.Fatalf("el user id debe ser el sub del token, obtuve %q", id.UserID)
 	}
 	if id.Service != "" {
 		t.Fatalf("una identidad de persona no lleva nombre de servicio, obtuve %q", id.Service)
@@ -241,31 +245,38 @@ rules:
 	}
 }
 
-// Dos usuarios distintos no pueden compartir sesión: es lo que aísla sus subjects y su inbox.
-func TestDeriveSessionIsStableAndDistinct(t *testing.T) {
-	a1 := DeriveSession("user-a")
-	a2 := DeriveSession("user-a")
-	b := DeriveSession("user-b")
+// Dos usuarios distintos no pueden compartir el hash: es lo que aísla sus inboxes.
+func TestHashUserIDIsStableAndDistinct(t *testing.T) {
+	a1 := HashUserID("user-a")
+	a2 := HashUserID("user-a")
+	b := HashUserID("user-b")
 
 	if a1 != a2 {
 		t.Fatalf("la derivación debe ser determinista: %q != %q", a1, a2)
 	}
 	if a1 == b {
-		t.Fatal("dos subs distintos no pueden derivar la misma sesión")
+		t.Fatal("dos user ids distintos no pueden derivar el mismo hash")
 	}
-	if len(a1) != sessionLen {
-		t.Fatalf("esperaba %d caracteres, obtuve %d (%q)", sessionLen, len(a1), a1)
+	if len(a1) != userIDHashLen {
+		t.Fatalf("esperaba %d caracteres, obtuve %d (%q)", userIDHashLen, len(a1), a1)
 	}
 	// Tiene que ser un token de subject válido: sin separadores ni wildcards.
-	if err := validateSubject("prod." + a1 + ".api.x"); err != nil {
-		t.Fatalf("la sesión derivada no es un token de subject válido: %v", err)
+	if err := validateSubject("_INBOX." + a1 + ".x"); err != nil {
+		t.Fatalf("el hash derivado no es un token de subject válido: %v", err)
 	}
 }
 
-func TestInboxPrefix(t *testing.T) {
-	id := Identity{Instance: "prod", Session: "abc123"}
-	if got := id.InboxPrefix(); got != "_INBOX.abc123" {
-		t.Fatalf("esperaba _INBOX.abc123, obtuve %q", got)
+// El inbox NO usa el user id crudo: un `sub` de Zitadel puede traer caracteres que no son
+// un token de subject válido, y el prefijo tiene que ser de largo fijo.
+func TestInboxPrefixUsesHashNotRawUserID(t *testing.T) {
+	id := Identity{Instance: "prod", UserID: "385270818583609346"}
+
+	want := "_INBOX." + HashUserID("385270818583609346")
+	if got := id.InboxPrefix(); got != want {
+		t.Fatalf("esperaba %q, obtuve %q", want, got)
+	}
+	if strings.Contains(id.InboxPrefix(), id.UserID) {
+		t.Fatalf("el inbox no debe llevar el user id crudo: %q", id.InboxPrefix())
 	}
 }
 
@@ -460,10 +471,10 @@ func TestEveryKVBucketHasExactlyOneManager(t *testing.T) {
 	}
 }
 
-// Una persona solo puede publicar bajo SU PROPIA sesión. Es la propiedad que sostiene todo
-// el modelo: si un cliente pudiera publicar bajo otra sesión, el receptor no podría confiar
+// Una persona solo puede publicar bajo SU PROPIO user id. Es la propiedad que sostiene todo
+// el modelo: si un cliente pudiera publicar bajo otro user id, el receptor no podría confiar
 // en la identidad que lee del subject y habría que reautorizar en cada servicio.
-func TestPersonTemplatesPublishOnlyUnderOwnSession(t *testing.T) {
+func TestPersonTemplatesPublishOnlyUnderOwnUserID(t *testing.T) {
 	rulesPath := filepath.Join("..", "..", "config", "rules.yaml")
 	if _, err := os.Stat(rulesPath); err != nil {
 		t.Skipf("no hay config desplegable: %v", err)
@@ -487,7 +498,7 @@ func TestPersonTemplatesPublishOnlyUnderOwnSession(t *testing.T) {
 			if strings.HasPrefix(subject, "$") {
 				continue
 			}
-			want := "dev." + id.Session + "."
+			want := "dev." + id.UserID + "."
 			if !strings.HasPrefix(subject, want) {
 				t.Fatalf("%s: una persona no debería poder publicar en %q (esperaba el prefijo %q)",
 					decision.Template, subject, want)

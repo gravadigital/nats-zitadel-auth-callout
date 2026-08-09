@@ -152,15 +152,29 @@ Tiene que decir `Es un JWT. ✓` y listar la claim de roles con `poc-user`. Si n
 | `Claims de roles presentes: NINGUNA` | falta el scope o el grant | ver §1.5; el scope ya lo manda el script |
 | rol distinto al esperado | credencial del service user equivocado | revisar qué JSON usaste |
 
-Las sesiones que va a derivar el callout (hacen falta para armar los subjects y el inbox):
+Las identidades que va a derivar el callout. Son **dos valores por usuario**, y no son
+intercambiables: el **user id crudo** arma los subjects, y su **hash** arma el inbox.
 
 ```sh
-S_USER=$(go run ./cmd/session --token "$T_USER"  | awk '/^session/{print $2}')
-S_ADMIN=$(go run ./cmd/session --token "$T_ADMIN" | awk '/^session/{print $2}')
-echo "user=$S_USER admin=$S_ADMIN"
+# user id crudo -> subjects
+S_USER=$(go run ./cmd/session --token "$T_USER"  | awk '/^user-id/{print $2}')
+S_ADMIN=$(go run ./cmd/session --token "$T_ADMIN" | awk '/^user-id/{print $2}')
+
+# hash del user id -> inbox
+H_USER=$(go run ./cmd/session --token "$T_USER"  | awk '/^inbox/{sub(/^_INBOX\./,"",$2); print $2}')
+H_ADMIN=$(go run ./cmd/session --token "$T_ADMIN" | awk '/^inbox/{sub(/^_INBOX\./,"",$2); print $2}')
+
+echo "user=$S_USER ($H_USER)  admin=$S_ADMIN ($H_ADMIN)"
 ```
 
-El service user `poc_demo` no necesita esto: la sesión de un servicio es su nombre, `demo`.
+El service user `poc_demo` también tiene user id propio y su inbox también va por hash — es
+un usuario de Zitadel como cualquier otro. Lo que lo distingue es el **endpoint** que atiende
+(`demo`), que sale de la regla y no del token:
+
+```sh
+S_DEMO=$(go run ./cmd/session --token "$T_DEMO" | awk '/^user-id/{print $2}')
+H_DEMO=$(go run ./cmd/session --token "$T_DEMO" | awk '/^inbox/{sub(/^_INBOX\./,"",$2); print $2}')
+```
 
 ---
 
@@ -171,30 +185,32 @@ NATS="nats --server nats://127.0.0.1:4322 --creds nats/out/sentinel-client.creds
 ```
 
 > **El `--inbox-prefix` no es opcional.** Los permisos acotan el inbox a
-> `_INBOX.<session>`; por defecto el cliente genera un `_INBOX.<aleatorio>` que nadie
-> autoriza. En una app real se fija con `nats.CustomInboxPrefix` (Go) o `inboxPrefix`
+> `_INBOX.<hash(user-id)>`; por defecto el cliente genera un `_INBOX.<aleatorio>` que nadie
+> autoriza. Ojo: el inbox va con el **hash**, no con el user id crudo que llevan los
+> subjects. En una app real se fija con `nats.CustomInboxPrefix` (Go) o `inboxPrefix`
 > (nats.js).
 
 ### 5.1 El servicio `demo` atiende y crea el bucket
 
-Dejalo corriendo en una terminal aparte — es quien responde los requests:
+Dejalo corriendo en una terminal aparte — es quien responde los requests. Atiende por su
+**endpoint** (`demo`), pero su inbox va por el hash de **su** user id:
 
 ```sh
-$NATS --token "$T_DEMO" --inbox-prefix "_INBOX.demo" \
+$NATS --token "$T_DEMO" --inbox-prefix "_INBOX.$H_DEMO" \
   reply 'dev.*.demo.>' 'respuesta de demo a {{Subject}}'
 ```
 
 Y en otra, que cree el bucket de la prueba (es el único con `manage: true`):
 
 ```sh
-$NATS --token "$T_DEMO" --inbox-prefix "_INBOX.demo" kv add poc-kv --history=1
+$NATS --token "$T_DEMO" --inbox-prefix "_INBOX.$H_DEMO" kv add poc-kv --history=1
 ```
 
 ### 5.2 Mensajes: los permisos cambian por rol
 
 ```sh
-U="$NATS --token $T_USER  --inbox-prefix _INBOX.$S_USER"
-A="$NATS --token $T_ADMIN --inbox-prefix _INBOX.$S_ADMIN"
+U="$NATS --token $T_USER  --inbox-prefix _INBOX.$H_USER"
+A="$NATS --token $T_ADMIN --inbox-prefix _INBOX.$H_ADMIN"
 ```
 
 | # | Comando | Esperado |
@@ -202,7 +218,7 @@ A="$NATS --token $T_ADMIN --inbox-prefix _INBOX.$S_ADMIN"
 | 1 | `$U request "dev.$S_USER.demo.ping" hola` | **responde** |
 | 2 | `$U pub "dev.$S_USER.demo.admin_reset" x` | **Permissions Violation** (solo admin) |
 | 3 | `$A request "dev.$S_ADMIN.demo.admin_reset" x` | **responde** |
-| 4 | `$U pub "dev.$S_ADMIN.demo.ping" x` | **Permissions Violation** (sesión ajena) |
+| 4 | `$U pub "dev.$S_ADMIN.demo.ping" x` | **Permissions Violation** (user id ajeno) |
 | 5 | `$U pub "prod.$S_USER.demo.ping" x` | **Permissions Violation** (otra instancia) |
 | 6 | `$U sub "dev.*.demo.>"` | **Permissions Violation** (no es un servicio) |
 
@@ -215,7 +231,7 @@ la identidad del subject. 6 es que una persona no puede hacerse pasar por el ser
 > código 0 sin imprimir nada** — parece que funcionó. `nats pub` sí muestra
 > `permissions violation` en el momento. Verificado: con `request`, el caso 2 pasa
 > desapercibido; con `pub`, dice
-> `Permissions Violation for Publish to "dev.<session>.demo.admin_reset"`.
+> `Permissions Violation for Publish to "dev.<user-id>.demo.admin_reset"`.
 > Ante cualquier duda, la fuente de verdad es el log del `nats-server` (§6).
 
 ### 5.3 KV: los permisos cambian por rol y por usuario
@@ -232,7 +248,7 @@ la identidad del subject. 6 es que una persona no puede hacerse pasar por el ser
 
 10–13 son el punto: **el mismo bucket, con alcances distintos según el rol**, y el scoping
 por usuario dentro del rol. Lo aplica el servidor NATS, no la aplicación — el alcance entra
-en el subject de la clave (`$KV.poc-kv.<session>.…`).
+en el subject de la clave (`$KV.poc-kv.<user-id>.…`).
 
 ### 5.4 Rechazos
 

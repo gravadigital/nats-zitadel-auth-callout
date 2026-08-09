@@ -54,49 +54,57 @@ no un salto por mensaje.
 ## 2. La gramática de subjects
 
 ```
-<instancia>.<session>.<svc>.<method>
+<instancia>.<user-id>.<svc>.<method>
 ```
 
 | Segmento | Qué es | Ejemplo |
 |---|---|---|
 | `instancia` | Despliegue. Aísla dev/stage/prod en un mismo NATS. | `dev` |
-| `session` | **Quién llama.** Persona: hash estable de su `sub`. Servicio: su nombre. | `h53hnzl2yizywbco`, `api` |
+| `user-id` | **Quién llama.** El `sub` de Zitadel, crudo. Igual para personas y para service users: los dos son usuarios de Zitadel. | `312094857203948572` |
 | `svc` | **A quién le habla.** | `api`, `jira`, `email` |
 | `method` | Qué le pide. | `create_project` |
 
-La pieza que sostiene todo es que **`session` es parte del subject y la fija el permiso, no
-la aplicación**. Un cliente solo puede publicar bajo su propia sesión, así que el receptor
+La pieza que sostiene todo es que **`user-id` es parte del subject y lo fija el permiso, no
+la aplicación**. Un cliente solo puede publicar bajo su propio user id, así que el receptor
 puede leer del subject quién le habla y confiar en ese dato: viene avalado por el callout, no
 por el cuerpo del mensaje.
+
+El user id va **crudo** en el subject a propósito: es lo que hace que un subject se lea de
+corrido y que un servicio identifique al caller sin tabla de traducción. La contrapartida,
+explícita: el userId de Zitadel queda visible en subjects, logs y trazas.
 
 Un servicio atiende con el caller en wildcard —`dev.*.api.>`— y responde por
 `allow_responses`, sin necesitar permiso de publicación hacia el inbox del cliente.
 
 ### El prefijo de inbox no es opcional
 
-Cada identidad tiene su inbox privado: `_INBOX.<session>.>`. **El cliente tiene que
-configurarlo al conectar**:
+Cada identidad tiene su inbox privado, bajo el **hash** de su user id:
+`_INBOX.<hash(user-id)>.>`. **El cliente tiene que configurarlo al conectar**:
 
 ```go
 nats.Connect(url, nats.UserCredentials(sentinel), nats.Token(accessToken),
-    nats.CustomInboxPrefix("_INBOX."+session))       // Go
+    nats.CustomInboxPrefix("_INBOX."+userIDHash))     // Go
 ```
 ```js
-connect({ servers, authenticator, token, inboxPrefix: `_INBOX.${session}` })  // nats.js
+connect({ servers, authenticator, token, inboxPrefix: `_INBOX.${userIDHash}` })  // nats.js
 ```
 
 Sin eso la librería genera un `_INBOX.<aleatorio>` que ningún permiso acotado autoriza, y las
 respuestas nunca llegan. La alternativa sería conceder `_INBOX.>`, pero entonces cualquier
 cliente de la cuenta podría suscribirse a las respuestas de los demás.
 
-Por eso la sesión de una persona es **determinista**: el cliente la recalcula de su propio
-token, sin canal lateral. `cmd/session` es la referencia:
+El hash es `sha256(user-id)` en base32 minúscula, 16 chars. No está para ocultar el user id
+—que ya va crudo en los subjects de mensajería— sino porque el prefijo de inbox necesita un
+token **de largo fijo y seguro para un subject**, y un `sub` arbitrario no lo garantiza.
+
+Es **determinista**: el cliente lo recalcula de su propio token, sin canal lateral.
+`cmd/session` es la referencia:
 
 ```console
 $ go run ./cmd/session 312094857203948572 dev
-session      h53hnzl2yizywbco
-inbox        _INBOX.h53hnzl2yizywbco
-pub (a api)  dev.h53hnzl2yizywbco.api.<method>
+user-id   312094857203948572
+inbox     _INBOX.tjqgrfpae3hr4ktc
+pub       dev.312094857203948572.<svc>.<method>
 ```
 
 ---
@@ -127,7 +135,7 @@ rules:
 
   - match: poc-service      # machine user
     type: service
-    service: demo           # su sesión y su endpoint
+    service: demo           # su endpoint (su user id sale del token)
     template: templates/poc-service.yaml
 ```
 
@@ -137,33 +145,47 @@ catch-all a propósito, para poder verificarlo.
 El orden importa: si un token puede traer dos roles, el que quede **arriba** gana. Poné el más
 restrictivo primero.
 
-`type` determina cómo se construye la **identidad**, no los permisos:
+`type` determina cómo se construye la **identidad**, no los permisos. El `user-id` es el
+mismo en los dos casos —el `sub` del token—; lo que cambia es si además hay un endpoint:
 
-| `type` | `session` | Para qué |
+| `type` | `user-id` | Endpoint (`{{service}}`) |
 |---|---|---|
-| `person` | `sha256(sub)` en base32, 16 chars | Aísla usuario de usuario. Determinista para que el cliente derive su inbox. Se hashea para no filtrar identificadores de Zitadel en subjects, que se ven en logs y monitoreo. |
-| `service` | el nombre del servicio | Legible en subjects, y **compartido entre réplicas** a propósito: es lo que permite balancear con queue groups. |
+| `person` | su `sub` | — no atiende ningún endpoint |
+| `service` | su `sub` (el del machine user) | el nombre declarado en la regla, **compartido entre réplicas** a propósito: es lo que permite balancear con queue groups |
+
+Que el endpoint sea un eje aparte del user id es lo que permite tener varias réplicas de un
+servicio atendiendo el mismo `dev.*.api.>` aunque cada una conecte con su propio usuario.
 
 ### Plantillas
 
 ```yaml
 pub:
-  allow: ["{{instance}}.{{session}}.demo.>"]
+  allow: ["{{instance}}.{{user_id}}.demo.>"]
   deny:  []
 sub:
-  allow: ["_INBOX.{{session}}.>"]
+  allow: ["_INBOX.{{user_id_hash}}.>"]
 kv:
   - bucket: poc-kv
     access: read-write          # none | read | read-write   (datos)
     manage: false               # ciclo de vida del bucket    (ortogonal)
-    keys: "{{session}}.>"       # QUÉ claves alcanza
+    keys: "{{user_id}}.>"       # QUÉ claves alcanza
     watch: false
 response:
   max: 1                        # allow_responses
   ttl: 45s
 ```
 
-Placeholders: `{{instance}}`, `{{session}}`, `{{service}}`.
+Placeholders:
+
+| Placeholder | Qué expande |
+|---|---|
+| `{{instance}}` | la instancia de deploy |
+| `{{user_id}}` | el `sub` del token, crudo |
+| `{{user_id_hash}}` | el hash del user id — para el prefijo de inbox |
+| `{{service}}` | el nombre del endpoint; solo en plantillas `type: service` |
+
+Van con guion **bajo** (`{{user_id}}`), no con guion medio: el nombre del placeholder es un
+identificador, aunque el segmento del subject se lea `<user-id>`.
 
 **Allow-list, no deny-list.** Las plantillas de persona enumeran los métodos uno por uno.
 Es más largo de mantener, y es a propósito: con una deny-list, un método nuevo queda
@@ -194,7 +216,7 @@ usuario**, y es el servidor el que lo aplica:
 kv:
   - bucket: poc-kv
     access: read-write
-    keys: "{{session}}.>"     # escribe y lee SOLO lo suyo
+    keys: "{{user_id}}.>"     # escribe y lee SOLO lo suyo
 ```
 
 Tres detalles que el modelo resuelve y conviene conocer:
@@ -280,25 +302,26 @@ rompe la confianza del servidor y obliga a reemitir todas las creds (`make clean
 El modo por defecto es `mock`: un IdP en proceso que decodifica la identidad del texto del
 token, sin secretos ni red. El formato es `mock:<sub>:<username>:<roles>`.
 
-El modo por defecto es `mock`: un IdP en proceso que decodifica la identidad del texto del
-token, sin secretos ni red. El formato es `mock:<sub>:<username>:<roles>`.
+Ojo con los dos valores distintos: los subjects llevan el **user id crudo** (`$UID`) y el
+inbox lleva su **hash** (`$IHASH`).
 
 ```sh
 NATS="nats --server nats://127.0.0.1:4322 --creds nats/out/sentinel-client.creds"
-S=$(go run ./cmd/session zit-ana dev | awk '/^session/{print $2}')
-U="$NATS --token mock:zit-ana:ana@grava.io:poc-user --inbox-prefix _INBOX.$S"
+UID=zit-ana
+IHASH=$(go run ./cmd/session "$UID" dev | awk '/^inbox/{sub(/^_INBOX\./,"",$2); print $2}')
+U="$NATS --token mock:$UID:ana@grava.io:poc-user --inbox-prefix _INBOX.$IHASH"
 
-# Bajo su propia sesión y un método habilitado: OK
-$U pub "dev.$S.demo.ping" hola
+# Bajo su propio user id y un método habilitado: OK
+$U pub "dev.$UID.demo.ping" hola
 
 # Método solo de poc-admin: Permissions Violation
-$U pub "dev.$S.demo.admin_reset" x
+$U pub "dev.$UID.demo.admin_reset" x
 
-# Sesión de otro: Permissions Violation
+# User id de otro: Permissions Violation
 $U pub "dev.otro.demo.ping" x
 
 # KV acotado por usuario (el bucket lo crea antes el service user poc-service)
-$U kv put poc-kv "$S.theme" dark      # OK
+$U kv put poc-kv "$UID.theme" dark    # OK
 $U kv put poc-kv "otro.theme" x       # falla
 ```
 
@@ -354,7 +377,7 @@ todos los proyectos del token, y un rol homónimo de otro proyecto podría match
 
 ```
 cmd/callout               el binario
-cmd/session               deriva sesión e inbox de un `sub` o de un token
+cmd/session               deriva user id e inbox de un `sub` o de un token
 internal/authz            el motor de permisos: routing por rol, plantillas, KV, identidad
 internal/idp              verificación del token (Zitadel por JWKS; mock para dev/CI)
 internal/callout          el protocolo de auth callout (XKey, JWTs, firma)
@@ -395,7 +418,7 @@ No hace falta recompilar ni reiniciar nada más que el callout.
 mock, con la config de `config/`) — los 16 casos del runbook:
 
 - **mensajes:** `poc-user` alcanza solo sus métodos; `poc-admin` alcanza todos; ninguno puede
-  publicar bajo la sesión de otro, ni cruzar de instancia, ni suscribirse como si fuera el
+  publicar bajo el user id de otro, ni cruzar de instancia, ni suscribirse como si fuera el
   servicio;
 - **KV, mismo bucket y alcances distintos por rol:** `poc-user` solo su propia clave;
   `poc-admin` lee todas y escribe solo la suya; el service user lo crea y lo opera;

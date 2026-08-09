@@ -229,7 +229,9 @@ func (s *Service) handle(msg *nats.Msg) {
 		Strs("roles", claims.Roles).
 		Str("matchedBy", decision.Rule).
 		Str("identity", string(decision.IdentityModel)).
-		Str("session", identity.Session).
+		// userId es el `sub`, así que no se repite. Se loguea el hash porque es el
+		// prefijo de inbox del cliente y no se deduce a ojo del resto del log.
+		Str("inboxHash", authz.HashUserID(identity.UserID)).
 		Str("template", decision.Template).
 		Int("pubAllow", len(perms.PubAllow)).
 		Int("subAllow", len(perms.SubAllow)).
@@ -253,7 +255,9 @@ func (s *Service) mintUserJWT(
 
 	claims.Name = identity.Username
 	if claims.Name == "" {
-		claims.Name = identity.Subject
+		// Sin nombre legible queda el user id, que es el `sub` del token: menos lindo en
+		// `nats server report connections`, pero identifica igual.
+		claims.Name = identity.UserID
 	}
 	// IssuerAccount es obligatorio cuando se firma con una signing key: sin él el
 	// servidor no puede saber a qué cuenta pertenece el usuario.

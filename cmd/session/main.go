@@ -1,12 +1,12 @@
-// Command session imprime la sesión que el callout derivaría para una identidad, y el
-// prefijo de inbox que le corresponde.
+// Command session imprime la identidad que el callout derivaría —user id y prefijo de
+// inbox— para un `sub` de Zitadel.
 //
 // Existe por dos motivos:
 //
 //   - Diagnóstico: para leer un subject de un log o del monitoreo y saber de quién es.
-//   - Contrato con los clientes: cada cliente tiene que derivar su propia sesión para poder
-//     fijar su prefijo de inbox. Este comando es la referencia contra la cual verificar una
-//     implementación en otro lenguaje.
+//   - Contrato con los clientes: cada cliente tiene que derivar el hash de su user id para
+//     poder fijar su prefijo de inbox. Este comando es la referencia contra la cual
+//     verificar una implementación en otro lenguaje.
 //
 // Uso:
 //
@@ -71,15 +71,13 @@ func run(args []string) error {
 
 	id := authz.Identity{
 		Instance: instance,
-		Session:  authz.DeriveSession(subject),
+		UserID:   subject,
 		Type:     authz.UserTypePerson,
-		Subject:  subject,
 	}
 
-	fmt.Printf("sub       %s\n", id.Subject)
-	fmt.Printf("session   %s\n", id.Session)
+	fmt.Printf("user-id   %s\n", id.UserID)
 	fmt.Printf("inbox     %s\n", id.InboxPrefix())
-	fmt.Printf("pub       %s.%s.<svc>.<method>\n", id.Instance, id.Session)
+	fmt.Printf("pub       %s.%s.<svc>.<method>\n", id.Instance, id.UserID)
 	return nil
 }
 

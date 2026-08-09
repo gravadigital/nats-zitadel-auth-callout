@@ -11,21 +11,23 @@ import (
 
 // personIdentity es una identidad de persona de prueba.
 func personIdentity() Identity {
-	return Identity{Instance: "prod", Session: "abc123", Type: UserTypePerson}
+	return Identity{Instance: "prod", UserID: "abc123", Type: UserTypePerson}
 }
 
-// serviceIdentity es una identidad de servicio de prueba.
+// serviceIdentity es una identidad de servicio de prueba. Un service user tiene su propio
+// user id (su `sub`) además del nombre de endpoint: son ejes distintos, así que acá llevan
+// valores distintos a propósito.
 func serviceIdentity() Identity {
-	return Identity{Instance: "prod", Session: "api", Service: "api", Type: UserTypeService}
+	return Identity{Instance: "prod", UserID: "svc-sub-1", Service: "api", Type: UserTypeService}
 }
 
 func TestExpandPlaceholders(t *testing.T) {
 	tmpl := &Template{
 		Pub: SubjectSet{
-			Allow: []string{"{{instance}}.{{session}}.api.>"},
-			Deny:  []string{"{{instance}}.{{session}}.api.danger"},
+			Allow: []string{"{{instance}}.{{user_id}}.api.>"},
+			Deny:  []string{"{{instance}}.{{user_id}}.api.danger"},
 		},
-		Sub: SubjectSet{Allow: []string{"_INBOX.{{session}}.>"}},
+		Sub: SubjectSet{Allow: []string{"_INBOX.{{user_id_hash}}.>"}},
 	}
 
 	perms, err := tmpl.Expand(personIdentity())
@@ -35,7 +37,8 @@ func TestExpandPlaceholders(t *testing.T) {
 
 	assertSubjects(t, "pub allow", perms.PubAllow, []string{"prod.abc123.api.>"})
 	assertSubjects(t, "pub deny", perms.PubDeny, []string{"prod.abc123.api.danger"})
-	assertSubjects(t, "sub allow", perms.SubAllow, []string{"_INBOX.abc123.>"})
+	// El inbox va bajo el HASH del user id, no bajo el user id crudo.
+	assertSubjects(t, "sub allow", perms.SubAllow, []string{"_INBOX." + HashUserID("abc123") + ".>"})
 }
 
 func TestExpandServicePlaceholder(t *testing.T) {
@@ -150,12 +153,12 @@ func TestKVReadSubjects(t *testing.T) {
 }
 
 // El caso que sostiene "permisos de KV variables por usuario": el direct-get lleva la
-// clave DENTRO del subject, así que acotar por {{session}} lo hace cumplir el servidor.
-func TestKVScopedBySession(t *testing.T) {
+// clave DENTRO del subject, así que acotar por {{user_id}} lo hace cumplir el servidor.
+func TestKVScopedByUserID(t *testing.T) {
 	tmpl := &Template{KV: []KVAccess{{
 		Bucket: "gestion-prefs",
 		Access: KVReadWrite,
-		Keys:   "{{session}}.>",
+		Keys:   "{{user_id}}.>",
 	}}}
 
 	perms, err := tmpl.Expand(personIdentity())
@@ -179,7 +182,7 @@ func TestKVScopedAccessDeniesRevisionGet(t *testing.T) {
 	tmpl := &Template{KV: []KVAccess{{
 		Bucket: "gestion-prefs",
 		Access: KVRead,
-		Keys:   "{{session}}.>",
+		Keys:   "{{user_id}}.>",
 	}}}
 
 	perms, err := tmpl.Expand(personIdentity())
@@ -313,7 +316,7 @@ func TestKVNoneWithoutManageGrantsNothingOnTheBucket(t *testing.T) {
 // $JS.API.INFO se concede solo si la plantilla declara algún acceso a KV: una plantilla sin
 // `kv:` no debe poder consultar la cuenta de JetStream.
 func TestJetStreamInfoOnlyWhenKVDeclared(t *testing.T) {
-	tmpl := &Template{Pub: SubjectSet{Allow: []string{"{{instance}}.{{session}}.api.>"}}}
+	tmpl := &Template{Pub: SubjectSet{Allow: []string{"{{instance}}.{{user_id}}.api.>"}}}
 
 	perms, err := tmpl.Expand(personIdentity())
 	if err != nil {
