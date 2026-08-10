@@ -10,13 +10,13 @@ FROM alpine:3.21
 
 RUN adduser -D -u 1001 callout
 
-# Los puntos de montaje tienen que existir: el rootfs es de solo lectura y runc no puede
-# crearlos al levantar el contenedor.
+# The mount points have to exist: the rootfs is read-only and runc cannot create them when
+# bringing the container up.
 RUN mkdir -p /etc/auth-callout /etc/nats-creds
 
 COPY --from=builder /out/callout /usr/local/bin/callout
 
-# La configuración (rules.yaml + templates) y las credenciales se montan por volumen:
-# no viven en la imagen. Ver deploy/nats/ en el repo de Hermes.
+# The configuration (rules.yaml + templates) and the credentials are mounted as volumes: they
+# do not live in the image. See deploy/nats/ in the Hermes repo.
 USER callout
 ENTRYPOINT ["/usr/local/bin/callout"]

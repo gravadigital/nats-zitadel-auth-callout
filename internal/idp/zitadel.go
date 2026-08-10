@@ -15,97 +15,97 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwt"
 )
 
-// Claims de Zitadel que nos interesan.
+// The Zitadel claims we care about.
 const (
-	// claimRolesAllProjects trae los roles de TODOS los proyectos a los que el token
-	// tiene acceso. Es el que ya usa la api de gestión hoy.
+	// claimRolesAllProjects carries the roles of ALL projects the token has access to.
 	claimRolesAllProjects = "urn:zitadel:iam:org:project:roles"
-	// claimRolesProjectFmt trae los roles de UN proyecto. Más preciso: evita que un rol
-	// homónimo de otro proyecto matchee una regla. Se usa si hay ProjectID configurado.
+	// claimRolesProjectFmt carries the roles of ONE project. More precise: it prevents a
+	// same-named role from another project matching a rule. Used when ProjectID is configured.
 	claimRolesProjectFmt = "urn:zitadel:iam:org:project:%s:roles"
-	// claimPreferredUsername es el nombre legible del usuario.
+	// claimPreferredUsername is the user's human-readable name.
 	claimPreferredUsername = "preferred_username"
 )
 
-// jwksRefreshInterval es cada cuánto se refresca el JWKS de Zitadel en background.
+// jwksRefreshInterval is how often Zitadel's JWKS is refreshed in the background.
 //
-// Es un PISO, no el intervalo exacto: httprc usa el `max-age` de la respuesta si es mayor.
-// Con Zitadel da igual —responde `cache-control: no-store` y un `expires` en el pasado, así
-// que no hay `max-age` del que agarrarse y este valor es el intervalo real.
+// It is a FLOOR, not the exact interval: httprc uses the response's `max-age` if it is
+// larger. With Zitadel it makes no difference — it answers `cache-control: no-store` and an
+// `expires` in the past, so there is no `max-age` to latch onto and this value is the real
+// interval.
 //
-// Por sí solo este refresco NO alcanza ante una rotación: entre que Zitadel empieza a firmar
-// con una clave nueva y el refresco siguiente, los tokens con esa `kid` se rechazan. Lo que
-// cierra esa ventana es el refetch on-demand de refreshForUnknownKey.
+// On its own this refresh is NOT enough to handle a rotation: between Zitadel starting to
+// sign with a new key and the next refresh, tokens carrying that `kid` would be rejected.
+// What closes that window is the on-demand refetch in refreshForUnknownKey.
 const jwksRefreshInterval = 15 * time.Minute
 
-// jwksRefetchCooldown es lo mínimo entre dos refetch on-demand disparados por una `kid`
-// desconocida.
+// jwksRefetchCooldown is the minimum time between two on-demand refetches triggered by an
+// unknown `kid`.
 //
-// Sin este freno, un token con una `kid` inventada fuerza un GET al JWKS de Zitadel por
-// intento — y eso pasa ANTES de autenticar, así que cualquiera puede dispararlo. Sería
-// convertir el callout en un amplificador de tráfico contra el IdP.
+// Without this brake, a token with a made-up `kid` forces a GET against Zitadel's JWKS on
+// every attempt — and that happens BEFORE authentication, so anyone can trigger it. It would
+// turn the callout into a traffic amplifier against the IdP.
 //
-// Un minuto es holgado para lo que tiene que resolver: en una rotación real alcanza con UN
-// refetch para incorporar la clave nueva, y a partir de ahí sirve el cache.
+// One minute is generous for what it has to solve: in a real rotation a SINGLE refetch is
+// enough to pick up the new key, and from then on the cache serves it.
 const jwksRefetchCooldown = time.Minute
 
-// userinfoTimeout acota la llamada a /oidc/v1/userinfo. Es un enriquecimiento opcional:
-// si tarda o falla, la autenticación sigue sin username.
+// userinfoTimeout bounds the call to /oidc/v1/userinfo. It is an optional enrichment: if it
+// is slow or fails, authentication proceeds without a username.
 const userinfoTimeout = 3 * time.Second
 
-// errUnknownKeyIDFragment es el fragmento con el que jwx reporta que la `kid` del token no
-// está en el JWKS (jws/key_provider.go). Es la señal de una rotación de claves.
+// errUnknownKeyIDFragment is the fragment jwx uses to report that the token's `kid` is not in
+// the JWKS (jws/key_provider.go). It is the signal of a key rotation.
 //
-// Se detecta por texto porque jwx v2 no expone un error tipado para este caso. Es frágil
-// ante un cambio de la librería, y por eso hay un test que falla si el mensaje cambia
-// (TestUnknownKeyIDFragmentSigueVigente): si jwx lo reescribe, el refetch dejaría de
-// dispararse y volveríamos a la ventana de rechazo, en silencio.
+// It is detected by text because jwx v2 exposes no typed error for this case. That is fragile
+// against a library change, which is why there is a test that fails if the message changes
+// (TestUnknownKeyIDFragmentStillMatches): if jwx rewrites it, the refetch would stop firing
+// and we would silently be back to the rejection window.
 const errUnknownKeyIDFragment = "failed to find key with key ID"
 
-// Zitadel verifica access tokens de Zitadel contra su JWKS.
+// Zitadel verifies Zitadel access tokens against its JWKS.
 //
-// La verificación es local (firma + claims), sin introspección: no hay un round-trip a
-// Zitadel por cada conexión. La contrapartida es que un token revocado sigue siendo
-// válido hasta su `exp` — aceptable porque el User JWT que se mintea expira con el token.
+// Verification is local (signature + claims), with no introspection: there is no round-trip
+// to Zitadel per connection. The trade-off is that a revoked token stays valid until its
+// `exp` — acceptable because the User JWT that gets minted expires with the token.
 type Zitadel struct {
 	issuer     string
 	projectID  string
 	cache      *jwk.Cache
 	jwksURL    string
 	httpClient *http.Client
-	// enrichUsername pide /oidc/v1/userinfo cuando el token no trae un nombre legible.
-	// Los tokens de machine user suelen no traerlo, y el nombre es lo que hace legible
-	// un `nats server report connections`.
+	// enrichUsername requests /oidc/v1/userinfo when the token carries no human-readable
+	// name. Machine user tokens usually do not carry one, and the name is what makes
+	// `nats server report connections` readable.
 	enrichUsername bool
 
-	// now es la fuente de tiempo del cooldown. Existe para que los tests puedan mover el
-	// reloj sin dormir; en producción es time.Now.
+	// now is the cooldown's time source. It exists so tests can move the clock without
+	// sleeping; in production it is time.Now.
 	now func() time.Time
 
-	// mu protege lastRefetch. VerifyToken corre concurrentemente —una vez por conexión
-	// entrante— así que el cooldown es estado compartido.
+	// mu guards lastRefetch. VerifyToken runs concurrently — once per incoming connection —
+	// so the cooldown is shared state.
 	mu sync.Mutex
-	// lastRefetch es cuándo se hizo el último refetch on-demand. El cero significa que
-	// todavía no hubo ninguno.
+	// lastRefetch is when the last on-demand refetch happened. Zero means there has not been
+	// one yet.
 	lastRefetch time.Time
 }
 
-// ZitadelOption configura un Zitadel.
+// ZitadelOption configures a Zitadel.
 type ZitadelOption func(*Zitadel)
 
-// WithProjectID acota la extracción de roles a un proyecto. Sin esto se leen los roles
-// de todos los proyectos del token.
+// WithProjectID narrows role extraction to a single project. Without it, the roles of every
+// project in the token are read.
 func WithProjectID(projectID string) ZitadelOption {
 	return func(z *Zitadel) { z.projectID = projectID }
 }
 
-// WithUsernameEnrichment activa la consulta a userinfo cuando el token no trae nombre.
+// WithUsernameEnrichment enables querying userinfo when the token carries no name.
 func WithUsernameEnrichment(enabled bool) ZitadelOption {
 	return func(z *Zitadel) { z.enrichUsername = enabled }
 }
 
-// withClock reemplaza la fuente de tiempo del cooldown de refetch. Solo para tests: deja
-// ejercitar el rate limit sin dormir un minuto.
+// withClock replaces the refetch cooldown's time source. Tests only: it allows exercising the
+// rate limit without sleeping for a minute.
 func withClock(now func() time.Time) ZitadelOption {
 	return func(z *Zitadel) {
 		if now != nil {
@@ -114,7 +114,7 @@ func withClock(now func() time.Time) ZitadelOption {
 	}
 }
 
-// WithHTTPClient reemplaza el cliente HTTP (para tests o para fijar timeouts/proxy).
+// WithHTTPClient replaces the HTTP client (for tests, or to pin timeouts/proxy settings).
 func WithHTTPClient(client *http.Client) ZitadelOption {
 	return func(z *Zitadel) {
 		if client != nil {
@@ -123,13 +123,13 @@ func WithHTTPClient(client *http.Client) ZitadelOption {
 	}
 }
 
-// NewZitadel construye un verificador contra la instancia de Zitadel en issuerURL.
+// NewZitadel builds a verifier against the Zitadel instance at issuerURL.
 //
-// Descubre el JWKS por OIDC discovery y arranca un cache con refresco automático, así
-// que una rotación de claves en Zitadel no requiere reiniciar el callout.
+// It discovers the JWKS through OIDC discovery and starts a cache with automatic refresh, so
+// a key rotation in Zitadel does not require restarting the callout.
 func NewZitadel(ctx context.Context, issuerURL string, opts ...ZitadelOption) (*Zitadel, error) {
 	if issuerURL == "" {
-		return nil, errors.New("idp: falta la URL del issuer de Zitadel")
+		return nil, errors.New("idp: missing the Zitadel issuer URL")
 	}
 	issuerURL = strings.TrimSuffix(issuerURL, "/")
 
@@ -154,33 +154,33 @@ func NewZitadel(ctx context.Context, issuerURL string, opts ...ZitadelOption) (*
 		jwk.WithMinRefreshInterval(jwksRefreshInterval),
 		jwk.WithHTTPClient(z.httpClient),
 	); err != nil {
-		return nil, fmt.Errorf("idp: registrar JWKS %q: %w", jwksURL, err)
+		return nil, fmt.Errorf("idp: register JWKS %q: %w", jwksURL, err)
 	}
-	// Primer fetch al arrancar: si el JWKS no se puede leer, es mejor fallar acá que
-	// rechazar todas las conexiones una vez arriba.
+	// First fetch at startup: if the JWKS cannot be read, better to fail here than to reject
+	// every connection once up.
 	if _, err := cache.Refresh(ctx, jwksURL); err != nil {
-		return nil, fmt.Errorf("idp: leer JWKS %q: %w", jwksURL, err)
+		return nil, fmt.Errorf("idp: read JWKS %q: %w", jwksURL, err)
 	}
 	z.cache = cache
 
 	return z, nil
 }
 
-// discoverJWKS resuelve el jwks_uri por el well-known de OpenID Connect.
+// discoverJWKS resolves jwks_uri through the OpenID Connect well-known document.
 func (z *Zitadel) discoverJWKS(ctx context.Context) (string, error) {
 	url := z.issuer + "/.well-known/openid-configuration"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", fmt.Errorf("idp: armar request de discovery: %w", err)
+		return "", fmt.Errorf("idp: build discovery request: %w", err)
 	}
 	resp, err := z.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("idp: OIDC discovery en %q: %w", url, err)
+		return "", fmt.Errorf("idp: OIDC discovery at %q: %w", url, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("idp: OIDC discovery en %q devolvió %s", url, resp.Status)
+		return "", fmt.Errorf("idp: OIDC discovery at %q returned %s", url, resp.Status)
 	}
 
 	var doc struct {
@@ -188,42 +188,42 @@ func (z *Zitadel) discoverJWKS(ctx context.Context) (string, error) {
 		JWKSURI string `json:"jwks_uri"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
-		return "", fmt.Errorf("idp: parsear discovery de %q: %w", url, err)
+		return "", fmt.Errorf("idp: parse discovery from %q: %w", url, err)
 	}
 	if doc.JWKSURI == "" {
-		return "", fmt.Errorf("idp: el discovery de %q no trae jwks_uri", url)
+		return "", fmt.Errorf("idp: the discovery document at %q carries no jwks_uri", url)
 	}
-	// El issuer declarado manda: es contra ese valor que se validan los tokens, y puede
-	// diferir de la URL con la que se llegó (proxies, hosts internos).
+	// The declared issuer wins: tokens are validated against that value, and it may differ
+	// from the URL used to reach it (proxies, internal hosts).
 	if doc.Issuer != "" {
 		z.issuer = strings.TrimSuffix(doc.Issuer, "/")
 	}
 	return doc.JWKSURI, nil
 }
 
-// VerifyToken valida firma, issuer y vigencia del token, y extrae las claims.
+// VerifyToken validates the token's signature, issuer and lifetime, and extracts the claims.
 //
-// Ante una `kid` que no está en el JWKS cacheado —el caso de una rotación de claves en
-// Zitadel— fuerza UN refetch del JWKS y reintenta. Sin eso, los tokens firmados con la
-// clave nueva se rechazan hasta el refresco periódico siguiente (ver jwksRefreshInterval).
+// Faced with a `kid` that is not in the cached JWKS — the case of a key rotation in Zitadel —
+// it forces ONE refetch of the JWKS and retries. Without that, tokens signed with the new key
+// would be rejected until the next periodic refresh (see jwksRefreshInterval).
 func (z *Zitadel) VerifyToken(ctx context.Context, token string) (*Claims, error) {
 	set, err := z.cache.Get(ctx, z.jwksURL)
 	if err != nil {
-		return nil, fmt.Errorf("idp: obtener JWKS: %w", err)
+		return nil, fmt.Errorf("idp: get JWKS: %w", err)
 	}
 
 	parsed, err := z.parse(token, set)
 	if err != nil && isUnknownKeyID(err) {
-		// La `kid` no está en el cache. Puede ser una rotación (recargar lo arregla) o un
-		// token con una `kid` inventada (recargar no cambia nada, por eso el cooldown).
+		// The `kid` is not in the cache. It may be a rotation (reloading fixes it) or a token
+		// with a made-up `kid` (reloading changes nothing, hence the cooldown).
 		if fresh, ok := z.refreshForUnknownKey(ctx); ok {
 			parsed, err = z.parse(token, fresh)
 		}
 	}
 	if err != nil {
-		// jwx no expone el vencimiento como error tipado, así que se distingue por texto.
-		// Importa porque un token vencido es un caso normal (el cliente debe renovar) y
-		// no un intento de acceso inválido: se auditan distinto.
+		// jwx does not expose expiry as a typed error, so it is distinguished by text. It
+		// matters because an expired token is a normal case (the client must renew) and not an
+		// invalid access attempt: they are audited differently.
 		if strings.Contains(err.Error(), `"exp" not satisfied`) {
 			return nil, fmt.Errorf("%w: %v", ErrExpiredToken, err)
 		}
@@ -245,7 +245,7 @@ func (z *Zitadel) VerifyToken(ctx context.Context, token string) (*Claims, error
 		claims.Username = username
 	}
 	if claims.Username == "" && z.enrichUsername {
-		// Best-effort: el username es para legibilidad, no para autorizar.
+		// Best-effort: the username is for readability, not for authorization.
 		if username, err := z.fetchUsername(ctx, token); err == nil {
 			claims.Username = username
 		}
@@ -254,8 +254,9 @@ func (z *Zitadel) VerifyToken(ctx context.Context, token string) (*Claims, error
 	return claims, nil
 }
 
-// parse valida el token contra un JWKS concreto. Separado de VerifyToken porque se ejecuta
-// dos veces: con el set cacheado y, si la `kid` no estaba, con el set recién traído.
+// parse validates the token against a specific JWKS. It is separate from VerifyToken because
+// it runs twice: with the cached set and, if the `kid` was not there, with the freshly
+// fetched set.
 func (z *Zitadel) parse(token string, set jwk.Set) (jwt.Token, error) {
 	return jwt.ParseString(token,
 		jwt.WithKeySet(set, jws.WithInferAlgorithmFromKey(true)),
@@ -264,21 +265,21 @@ func (z *Zitadel) parse(token string, set jwk.Set) (jwt.Token, error) {
 	)
 }
 
-// isUnknownKeyID indica si el error es "la `kid` del token no está en el JWKS".
+// isUnknownKeyID reports whether the error is "the token's `kid` is not in the JWKS".
 func isUnknownKeyID(err error) bool {
 	return err != nil && strings.Contains(err.Error(), errUnknownKeyIDFragment)
 }
 
-// refreshForUnknownKey fuerza un refetch del JWKS y devuelve el set nuevo.
+// refreshForUnknownKey forces a refetch of the JWKS and returns the new set.
 //
-// Devuelve ok=false si el cooldown todavía no venció o si el refetch falló; en ambos casos
-// el llamador se queda con el error original de verificación. Un JWKS que no responde no
-// debe convertirse en un error distinto: para el cliente el resultado es el mismo —su token
-// no verifica— y el error de firma es más honesto que uno de red.
+// It returns ok=false if the cooldown has not elapsed yet or if the refetch failed; in both
+// cases the caller keeps the original verification error. A JWKS that does not respond must
+// not turn into a different error: for the client the outcome is the same — its token does not
+// verify — and a signature error is more honest than a network one.
 //
-// El cooldown se marca ANTES de pedir el JWKS, no después: así N conexiones concurrentes con
-// `kid` desconocida disparan un solo fetch y no N. Es lo que hace que el rate limit sirva
-// justo cuando más importa, que es bajo carga.
+// The cooldown is marked BEFORE requesting the JWKS, not after: that way N concurrent
+// connections with an unknown `kid` trigger a single fetch rather than N. It is what makes the
+// rate limit useful exactly when it matters most, which is under load.
 func (z *Zitadel) refreshForUnknownKey(ctx context.Context) (jwk.Set, bool) {
 	z.mu.Lock()
 	now := z.now()
@@ -296,10 +297,10 @@ func (z *Zitadel) refreshForUnknownKey(ctx context.Context) (jwk.Set, bool) {
 	return set, true
 }
 
-// extractRoles aplana los roles de proyecto del token a una lista de nombres.
+// extractRoles flattens the token's project roles into a list of names.
 //
-// Zitadel los emite como un objeto anidado `{ "<rol>": { "<orgId>": "<dominio>" } }`.
-// El callout solo rutea por nombre de rol, así que se queda con las claves.
+// Zitadel emits them as a nested object `{ "<role>": { "<orgId>": "<domain>" } }`. The
+// callout only routes by role name, so it keeps the keys.
 func extractRoles(token jwt.Token, projectID string) []string {
 	claimNames := make([]string, 0, 2)
 	if projectID != "" {
@@ -325,7 +326,7 @@ func extractRoles(token jwt.Token, projectID string) []string {
 	return nil
 }
 
-// stringClaim lee una claim de tipo string.
+// stringClaim reads a string-typed claim.
 func stringClaim(token jwt.Token, name string) (string, bool) {
 	raw, ok := token.Get(name)
 	if !ok {
@@ -335,16 +336,16 @@ func stringClaim(token jwt.Token, name string) (string, bool) {
 	return value, ok
 }
 
-// fetchUsername pide /oidc/v1/userinfo con el token del cliente para obtener un nombre
-// legible. Solo se usa cuando el token no trae `preferred_username` — el caso típico de
-// un machine user.
+// fetchUsername requests /oidc/v1/userinfo with the client's token to obtain a
+// human-readable name. It is only used when the token carries no `preferred_username` — the
+// typical case for a machine user.
 func (z *Zitadel) fetchUsername(ctx context.Context, token string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, userinfoTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, z.issuer+"/oidc/v1/userinfo", nil)
 	if err != nil {
-		return "", fmt.Errorf("idp: armar request de userinfo: %w", err)
+		return "", fmt.Errorf("idp: build userinfo request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
@@ -355,7 +356,7 @@ func (z *Zitadel) fetchUsername(ctx context.Context, token string) (string, erro
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("idp: userinfo devolvió %s", resp.Status)
+		return "", fmt.Errorf("idp: userinfo returned %s", resp.Status)
 	}
 
 	var info struct {
@@ -363,7 +364,7 @@ func (z *Zitadel) fetchUsername(ctx context.Context, token string) (string, erro
 		Name              string `json:"name"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return "", fmt.Errorf("idp: parsear userinfo: %w", err)
+		return "", fmt.Errorf("idp: parse userinfo: %w", err)
 	}
 	if info.PreferredUsername != "" {
 		return info.PreferredUsername, nil

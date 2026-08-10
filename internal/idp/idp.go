@@ -1,9 +1,9 @@
-// Package idp verifica el access token que el cliente presenta al conectar y extrae de
-// él lo único que el callout necesita: quién es (sub), cómo se llama, cuándo expira y
-// qué roles tiene.
+// Package idp verifies the access token a client presents when connecting and extracts from
+// it the only things the callout needs: who it is (sub), what it is called, when it expires
+// and which roles it has.
 //
-// El callout NO emite tokens ni habla el flujo OIDC: eso ya pasó entre el cliente y
-// Zitadel. Acá solo se valida un token ya emitido.
+// The callout does NOT issue tokens and does not speak the OIDC flow: that already happened
+// between the client and Zitadel. Here an already-issued token is only validated.
 package idp
 
 import (
@@ -12,35 +12,34 @@ import (
 	"time"
 )
 
-// Errores de verificación. El callout los traduce a un AuthorizationResponse con error;
-// el cliente ve un fallo de autorización al conectar.
+// Verification errors. The callout translates them into an AuthorizationResponse carrying an
+// error; the client sees an authorization failure when connecting.
 var (
-	// ErrInvalidToken indica un token que no verifica (firma, formato, issuer, audiencia).
-	ErrInvalidToken = errors.New("idp: token inválido")
-	// ErrExpiredToken indica un token bien formado pero vencido.
-	ErrExpiredToken = errors.New("idp: token expirado")
-	// ErrNoSubject indica un token sin `sub`. Sin sub no hay identidad que derivar.
-	ErrNoSubject = errors.New("idp: el token no trae `sub`")
+	// ErrInvalidToken means a token that does not verify (signature, format, issuer, audience).
+	ErrInvalidToken = errors.New("idp: invalid token")
+	// ErrExpiredToken means a well-formed but expired token.
+	ErrExpiredToken = errors.New("idp: expired token")
+	// ErrNoSubject means a token with no `sub`. Without a sub there is no identity to derive.
+	ErrNoSubject = errors.New("idp: the token carries no `sub`")
 )
 
-// Claims es lo que el callout extrae del token, ya normalizado.
+// Claims is what the callout extracts from the token, already normalized.
 type Claims struct {
-	// Subject es el `sub`: el userId de Zitadel. Identifica al usuario o al service user.
+	// Subject is the `sub`: the Zitadel userId. It identifies the user or the service user.
 	Subject string
-	// Username es el nombre legible (`preferred_username`, o el que devuelva userinfo).
-	// Puede venir vacío: los tokens de machine user a menudo no lo traen.
+	// Username is the human-readable name (`preferred_username`, or whatever userinfo
+	// returns). It may be empty: machine user tokens often do not carry it.
 	Username string
-	// Roles son los roles de proyecto del token, ya aplanados a una lista de nombres.
+	// Roles are the token's project roles, already flattened into a list of names.
 	Roles []string
-	// ExpiresAt es el `exp`. Acota la vigencia del User JWT que mintea el callout, para
-	// que la sesión NATS no sobreviva al token que la autorizó.
+	// ExpiresAt is the `exp`. It bounds the lifetime of the User JWT the callout mints, so
+	// that the NATS session does not outlive the token that authorized it.
 	ExpiresAt time.Time
 }
 
-// Verifier verifica un access token. Está como interfaz para que el callout no dependa
-// de Zitadel: en tests y en CI se usa una implementación de mentira (ver aidpmock) sin
-// levantar un IdP.
+// Verifier verifies an access token. It is an interface so the callout does not depend on
+// Zitadel: tests and CI use a fake implementation (see Mock) without standing up an IdP.
 type Verifier interface {
-	// VerifyToken valida el token y devuelve sus claims normalizadas.
+	// VerifyToken validates the token and returns its normalized claims.
 	VerifyToken(ctx context.Context, token string) (*Claims, error)
 }

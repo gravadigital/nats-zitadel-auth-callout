@@ -1,78 +1,78 @@
 #!/usr/bin/env bash
 #
-# zitadel-token.sh — imprime un access token de Zitadel para un service user (machine user).
+# zitadel-token.sh — prints a Zitadel access token for a service user (machine user).
 #
-# Detecta automáticamente los dos formatos de credencial que entrega Zitadel:
+# It auto-detects the two credential formats Zitadel hands out:
 #
 #   A) key JSON  {keyId, key, userId}      → JWT-profile (private_key_jwt)
-#      Se firma localmente un JWT con la private key y se intercambia por un token.
-#      Es el formato de "Keys → New → JSON" en el machine user. Necesita openssl.
+#      A JWT is signed locally with the private key and exchanged for a token.
+#      This is the "Keys → New → JSON" format on the machine user. It needs openssl.
 #
 #   B) app creds {clientId, clientSecret}  → client_credentials (Basic auth)
-#      Es el formato de "Secrets → Generate Client Secret" en el machine user.
-#      Más simple: un solo curl, sin firmar nada.
+#      This is the "Secrets → Generate Client Secret" format on the machine user.
+#      Simpler: a single curl, nothing to sign.
 #
-# Uso:
+# Usage:
 #   ZITADEL_ISSUER_URL=https://id.grava.io ./scripts/zitadel-token.sh secrets/poc-user.json
 #   cat creds.json | ZITADEL_ISSUER_URL=https://id.grava.io ./scripts/zitadel-token.sh
 #
 # Variables:
-#   ZITADEL_ISSUER_URL        (obligatoria) la instancia de Zitadel
-#   ZITADEL_PROJECT_ID        (recomendada) proyecto donde viven los roles; agrega el
-#                             scope de audiencia para que el proyecto entre en el `aud`
-#   ZITADEL_PROJECT_AUDIENCE  (opcional, solo formato A) audience del assertion JWT;
-#                             por defecto el issuer
+#   ZITADEL_ISSUER_URL        (required) the Zitadel instance
+#   ZITADEL_PROJECT_ID        (recommended) the project where the roles live; it adds the
+#                             audience scope so the project ends up in the `aud`
+#   ZITADEL_PROJECT_AUDIENCE  (optional, format A only) the assertion JWT's audience;
+#                             defaults to the issuer
 
 set -euo pipefail
 
-ISSUER="${ZITADEL_ISSUER_URL:?falta ZITADEL_ISSUER_URL}"
+ISSUER="${ZITADEL_ISSUER_URL:?ZITADEL_ISSUER_URL is not set}"
 ISSUER="${ISSUER%/}"
 
 for bin in jq curl; do
-  command -v "$bin" >/dev/null || { echo "falta $bin" >&2; exit 1; }
+  command -v "$bin" >/dev/null || { echo "$bin is missing" >&2; exit 1; }
 done
 
 if [[ $# -ge 1 && -n "${1:-}" ]]; then
-  [[ -f "$1" ]] || { echo "no existe el archivo: $1" >&2; exit 1; }
+  [[ -f "$1" ]] || { echo "file does not exist: $1" >&2; exit 1; }
   JSON=$(cat "$1")
 else
   JSON=$(cat)
 fi
-[[ -n "$JSON" ]] || { echo "JSON vacío (pasá un archivo o por stdin)" >&2; exit 1; }
+[[ -n "$JSON" ]] || { echo "empty JSON (pass a file or pipe it through stdin)" >&2; exit 1; }
 
 has() { echo "$JSON" | jq -e "$1" >/dev/null 2>&1; }
 
 # --- Scopes ---------------------------------------------------------------------------
 #
-# `urn:zitadel:iam:org:projects:roles` es OBLIGATORIO. Sin él, un token de machine user NO
-# TRAE LOS ROLES: a diferencia del login web interactivo (que asserta roles según el flag
-# del proyecto), los flujos machine-to-machine solo incluyen el claim
-# `urn:zitadel:iam:org:project:<id>:roles` si se pide explícitamente este scope.
+# `urn:zitadel:iam:org:projects:roles` is MANDATORY. Without it, a machine user token does NOT
+# CARRY THE ROLES: unlike the interactive web login (which asserts roles according to the
+# project's flag), machine-to-machine flows only include the
+# `urn:zitadel:iam:org:project:<id>:roles` claim if this scope is requested explicitly.
 #
-# Y es el scope GENÉRICO el que funciona: pedir los roles de un proyecto puntual
-# (`...:project:id:<id>:roles`) no alcanzó en la práctica. Verificado en vivo.
+# And it is the GENERIC scope that works: requesting the roles of a specific project
+# (`...:project:id:<id>:roles`) did not suffice in practice. Verified live.
 #
-# Sin roles en el token, el callout no matchea ninguna regla y rechaza la conexión. El
-# síntoma es un `Authorization Violation` al conectar y un "no se pudo resolver permisos"
-# con `roles=[]` en el log del callout.
+# With no roles in the token, the callout matches no rule and rejects the connection. The
+# symptom is an `Authorization Violation` when connecting and a "could not resolve permissions"
+# with `roles=[]` in the callout's log.
 SCOPE="openid profile urn:zitadel:iam:org:projects:roles"
 
-# Mete el proyecto en el `aud` del token. Con verificación por JWKS no es imprescindible
-# (la firma se valida localmente), pero sí lo es si algún día se usa introspección.
+# Puts the project into the token's `aud`. With JWKS verification it is not essential (the
+# signature is validated locally), but it is if introspection is ever used.
 if [[ -n "${ZITADEL_PROJECT_ID:-}" ]]; then
   SCOPE="$SCOPE urn:zitadel:iam:org:project:id:${ZITADEL_PROJECT_ID}:aud"
 fi
 
-# --- Detección de formato -------------------------------------------------------------
+# --- Format detection -----------------------------------------------------------------
 if has '.key and .keyId' && ! has '.userId'; then
-  echo "ERROR: el JSON tiene keyId/key pero NO userId." >&2
-  echo "La key de machine user de Zitadel incluye 'userId' (es el iss/sub del assertion)." >&2
-  echo "Reexportá la key completa desde el machine user." >&2
+  echo "ERROR: the JSON has keyId/key but NOT userId." >&2
+  echo "A Zitadel machine user key includes 'userId' (it is the assertion's iss/sub)." >&2
+  echo "Re-export the complete key from the machine user." >&2
   exit 1
 fi
 
 if has '.key and .keyId and .userId'; then
-  command -v openssl >/dev/null || { echo "falta openssl (formato keyId/key/userId)" >&2; exit 1; }
+  command -v openssl >/dev/null || { echo "openssl is missing (keyId/key/userId format)" >&2; exit 1; }
 
   AUD="${ZITADEL_PROJECT_AUDIENCE:-$ISSUER}"
   KEY_ID=$(echo "$JSON" | jq -r .keyId)
@@ -106,14 +106,14 @@ elif has '.clientId and .clientSecret'; then
     --data-urlencode "scope=$SCOPE")
 
 else
-  echo "ERROR: JSON no reconocido. Esperaba {keyId,key,userId} o {clientId,clientSecret}." >&2
-  echo "Claves presentes: $(echo "$JSON" | jq -r 'keys | join(", ")')" >&2
+  echo "ERROR: unrecognized JSON. Expected {keyId,key,userId} or {clientId,clientSecret}." >&2
+  echo "Keys present: $(echo "$JSON" | jq -r 'keys | join(", ")')" >&2
   exit 1
 fi
 
 token=$(echo "$resp" | jq -r '.access_token // empty')
 if [[ -z "$token" ]]; then
-  echo "ERROR: Zitadel no devolvió access_token. Respuesta:" >&2
+  echo "ERROR: Zitadel returned no access_token. Response:" >&2
   echo "$resp" | jq . >&2 2>/dev/null || echo "$resp" >&2
   exit 1
 fi

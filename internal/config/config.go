@@ -1,11 +1,12 @@
-// Package config lee la configuración del callout del entorno.
+// Package config reads the callout's configuration from the environment.
 //
-// Se parte en dos fuentes a propósito:
+// It is split into two sources on purpose:
 //
-//   - lo que decide una persona (URL de NATS, issuer de Zitadel, instancia) va en .env;
-//   - lo que genera el bootstrap (seeds, pubkeys, creds) se expone por nats/out/callout-env.sh,
-//     que el script de arranque hace `source`. Así las claves nunca se escriben a mano
-//     y regenerar la identidad NATS no obliga a editar configuración.
+//   - what a person decides (NATS URL, Zitadel issuer, instance) goes in .env;
+//   - what the bootstrap generates (seeds, pubkeys, creds) is exposed through
+//     nats/out/callout-env.sh, which the startup script sources. That way the keys are never
+//     written by hand and regenerating the NATS identity does not force editing any
+//     configuration.
 package config
 
 import (
@@ -15,68 +16,68 @@ import (
 	"strings"
 )
 
-// Modos de identidad.
+// Identity modes.
 const (
-	// IDPModeZitadel valida los tokens contra una instancia real de Zitadel.
+	// IDPModeZitadel validates tokens against a real Zitadel instance.
 	IDPModeZitadel = "zitadel"
-	// IDPModeMock valida contra un IdP de mentira, en proceso. Es el modo de CI y de
-	// desarrollo local: no necesita secretos ni red.
+	// IDPModeMock validates against a fake, in-process IdP. It is the CI and local
+	// development mode: it needs no secrets and no network.
 	IDPModeMock = "mock"
 )
 
-// Config es la configuración completa del callout.
+// Config is the callout's full configuration.
 type Config struct {
-	// NATSURL es la URL del servidor NATS.
+	// NATSURL is the NATS server URL.
 	NATSURL string
-	// HandlerCreds son las creds del sentinel-handler de la cuenta AUTH: la conexión del
-	// propio servicio. Tiene que estar declarado en `--auth-user`, para que el servidor
-	// lo autorice directo y el callout no se dispare sobre sí mismo.
+	// HandlerCreds are the creds of the AUTH account's sentinel-handler: the service's own
+	// connection. It has to be declared in `--auth-user`, so that the server authorizes it
+	// directly and the callout is not triggered against itself.
 	HandlerCreds string
 
-	// AppAccountSigningKeySeed es la seed de la signing key de la cuenta APP. Firma los
-	// User JWT: es lo que hace que el usuario aterrice en esa cuenta.
+	// AppAccountSigningKeySeed is the seed of the APP account's signing key. It signs the
+	// User JWTs: it is what makes the user land in that account.
 	AppAccountSigningKeySeed string
-	// AppAccountPubKey es la pubkey de la cuenta APP (claim IssuerAccount).
+	// AppAccountPubKey is the APP account's public key (the IssuerAccount claim).
 	AppAccountPubKey string
-	// AuthAccountSigningKeySeed es la seed de la signing key de la cuenta AUTH. Firma el
-	// authorization_response, y es la que el servidor tiene configurada como issuer.
+	// AuthAccountSigningKeySeed is the seed of the AUTH account's signing key. It signs the
+	// authorization_response, and it is the one the server has configured as the issuer.
 	AuthAccountSigningKeySeed string
-	// XKeySeed es la seed curve25519 del callout (encriptación de los requests). Vacía
-	// desactiva la encriptación; solo tiene sentido si el server tampoco tiene --curve.
+	// XKeySeed is the callout's curve25519 seed (request encryption). Leaving it empty
+	// disables encryption; that only makes sense if the server has no --curve either.
 	XKeySeed string
 
-	// RulesPath es el path a rules.yaml. Las plantillas se resuelven relativas a su directorio.
+	// RulesPath is the path to rules.yaml. Templates are resolved relative to its directory.
 	RulesPath string
-	// Instance es el primer token de todo subject: aísla despliegues que comparten NATS.
+	// Instance is the first token of every subject: it isolates deployments sharing a NATS.
 	Instance string
 
-	// IDPMode es zitadel o mock.
+	// IDPMode is zitadel or mock.
 	IDPMode string
-	// ZitadelIssuerURL es la URL de la instancia de Zitadel (modo zitadel).
+	// ZitadelIssuerURL is the Zitadel instance's URL (zitadel mode).
 	ZitadelIssuerURL string
-	// ZitadelProjectID acota la lectura de roles a un proyecto. Vacío lee los roles de
-	// todos los proyectos del token.
+	// ZitadelProjectID narrows role reading to a single project. Empty reads the roles of
+	// every project in the token.
 	ZitadelProjectID string
 
-	// LogLevel es el nivel de log (debug, info, warn, error).
+	// LogLevel is the log level (debug, info, warn, error).
 	LogLevel string
 }
 
-// Load arma la Config desde el entorno y la valida.
+// Load assembles the Config from the environment and validates it.
 func Load() (*Config, error) {
 	cfg := &Config{
-		NATSURL:                   env("GESTION_NATS_URL", "nats://127.0.0.1:4222"),
-		HandlerCreds:              os.Getenv("GESTION_HANDLER_CREDS"),
-		AppAccountSigningKeySeed:  os.Getenv("GESTION_APP_ACCOUNT_SK_SEED"),
-		AppAccountPubKey:          os.Getenv("GESTION_APP_ACCOUNT_PUB"),
-		AuthAccountSigningKeySeed: os.Getenv("GESTION_AUTH_ACCOUNT_SK_SEED"),
-		XKeySeed:                  os.Getenv("GESTION_XKEY_SEED"),
-		RulesPath:                 env("GESTION_RULES_PATH", "config/rules.yaml"),
-		Instance:                  env("GESTION_INSTANCE", "dev"),
-		IDPMode:                   env("GESTION_IDP_MODE", IDPModeMock),
-		ZitadelIssuerURL:          os.Getenv("GESTION_ZITADEL_ISSUER_URL"),
-		ZitadelProjectID:          os.Getenv("GESTION_ZITADEL_PROJECT_ID"),
-		LogLevel:                  env("GESTION_LOG_LEVEL", "info"),
+		NATSURL:                   env("CALLOUT_NATS_URL", "nats://127.0.0.1:4222"),
+		HandlerCreds:              os.Getenv("CALLOUT_HANDLER_CREDS"),
+		AppAccountSigningKeySeed:  os.Getenv("CALLOUT_APP_ACCOUNT_SK_SEED"),
+		AppAccountPubKey:          os.Getenv("CALLOUT_APP_ACCOUNT_PUB"),
+		AuthAccountSigningKeySeed: os.Getenv("CALLOUT_AUTH_ACCOUNT_SK_SEED"),
+		XKeySeed:                  os.Getenv("CALLOUT_XKEY_SEED"),
+		RulesPath:                 env("CALLOUT_RULES_PATH", "config/rules.yaml"),
+		Instance:                  env("CALLOUT_INSTANCE", "dev"),
+		IDPMode:                   env("CALLOUT_IDP_MODE", IDPModeMock),
+		ZitadelIssuerURL:          os.Getenv("CALLOUT_ZITADEL_ISSUER_URL"),
+		ZitadelProjectID:          os.Getenv("CALLOUT_ZITADEL_PROJECT_ID"),
+		LogLevel:                  env("CALLOUT_LOG_LEVEL", "info"),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -85,8 +86,8 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// validate chequea que no falte nada indispensable. Se hace todo junto para que un
-// deploy mal configurado muestre en un solo arranque todo lo que le falta.
+// validate checks that nothing essential is missing. It is all done at once so that a
+// misconfigured deploy shows everything it lacks in a single startup.
 func (c *Config) validate() error {
 	var missing []string
 	require := func(name, value string) {
@@ -95,37 +96,36 @@ func (c *Config) validate() error {
 		}
 	}
 
-	require("GESTION_HANDLER_CREDS", c.HandlerCreds)
-	require("GESTION_APP_ACCOUNT_SK_SEED", c.AppAccountSigningKeySeed)
-	require("GESTION_APP_ACCOUNT_PUB", c.AppAccountPubKey)
-	require("GESTION_AUTH_ACCOUNT_SK_SEED", c.AuthAccountSigningKeySeed)
-	require("GESTION_RULES_PATH", c.RulesPath)
-	require("GESTION_INSTANCE", c.Instance)
+	require("CALLOUT_HANDLER_CREDS", c.HandlerCreds)
+	require("CALLOUT_APP_ACCOUNT_SK_SEED", c.AppAccountSigningKeySeed)
+	require("CALLOUT_APP_ACCOUNT_PUB", c.AppAccountPubKey)
+	require("CALLOUT_AUTH_ACCOUNT_SK_SEED", c.AuthAccountSigningKeySeed)
+	require("CALLOUT_RULES_PATH", c.RulesPath)
+	require("CALLOUT_INSTANCE", c.Instance)
 
 	switch c.IDPMode {
 	case IDPModeZitadel:
-		require("GESTION_ZITADEL_ISSUER_URL", c.ZitadelIssuerURL)
+		require("CALLOUT_ZITADEL_ISSUER_URL", c.ZitadelIssuerURL)
 	case IDPModeMock:
 	default:
-		return fmt.Errorf("config: GESTION_IDP_MODE %q inválido (esperaba %s o %s)",
+		return fmt.Errorf("config: invalid CALLOUT_IDP_MODE %q (expected %s or %s)",
 			c.IDPMode, IDPModeZitadel, IDPModeMock)
 	}
 
 	if len(missing) > 0 {
-		return fmt.Errorf("config: faltan variables de entorno: %s", strings.Join(missing, ", "))
+		return fmt.Errorf("config: missing environment variables: %s", strings.Join(missing, ", "))
 	}
 
-	// La instancia es el primer token de todo subject: un punto o un wildcard la
-	// romperían de forma difícil de diagnosticar (los permisos quedarían corridos
-	// un segmento).
+	// The instance is the first token of every subject: a dot or a wildcard would break it in
+	// a way that is hard to diagnose (the permissions would be shifted by one segment).
 	if strings.ContainsAny(c.Instance, ".*> ") {
-		return errors.New("config: GESTION_INSTANCE no puede contener `.`, `*`, `>` ni espacios")
+		return errors.New("config: CALLOUT_INSTANCE cannot contain `.`, `*`, `>` or spaces")
 	}
 
 	return nil
 }
 
-// env lee una variable con default.
+// env reads a variable with a fallback.
 func env(name, fallback string) string {
 	if value := os.Getenv(name); value != "" {
 		return value

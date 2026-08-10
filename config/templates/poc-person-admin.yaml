@@ -1,13 +1,13 @@
-# PoC — PERSONA con rol `poc-admin` (permisos amplios)
+# PoC — PERSON with the `poc-admin` role (broad permissions)
 #
-# Gramática y placeholders: ver poc-person.yaml.
+# Grammar and placeholders: see poc-person.yaml.
 #
-# Diferencias contra `poc-user`, que son justamente lo que la prueba verifica:
-#   mensajes  todos los métodos de `demo` (incluido admin_reset), no solo dos
-#   KV        lee TODO el bucket; escribe solo lo suyo
+# Differences against `poc-user`, which are exactly what the test verifies:
+#   messages  every method of `demo` (admin_reset included), not just two
+#   KV        reads the WHOLE bucket; writes only its own
 #
-# Un rol amplio NO es superusuario de NATS: sigue acotado a su propio user id, así que no
-# puede publicar haciéndose pasar por otro ni leer el inbox de nadie.
+# A broad role is NOT a NATS superuser: it stays scoped to its own user id, so it cannot
+# publish while impersonating someone else, nor read anyone's inbox.
 
 pub:
   allow:
@@ -18,8 +18,8 @@ sub:
     - "_INBOX.{{user_id_hash}}.>"
 
 kv:
-  # Dos entradas sobre el MISMO bucket, con alcances distintos: lectura completa y
-  # escritura acotada. Es la forma de expresar "ve todo, toca solo lo suyo".
+  # Two entries over the SAME bucket, with different scopes: full read and scoped write. It is
+  # how you express "sees everything, touches only its own".
   - bucket: poc-kv
     access: read
     keys: ">"

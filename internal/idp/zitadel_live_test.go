@@ -1,14 +1,14 @@
 //go:build live
 
-// Tests contra una instancia REAL de Zitadel. Quedan detrás del build tag `live` porque
-// necesitan red y una instancia accesible: no corren en `go test ./...`.
+// Tests against a REAL Zitadel instance. They sit behind the `live` build tag because they
+// need network access and a reachable instance: they do not run under `go test ./...`.
 //
-//	GESTION_ZITADEL_ISSUER_URL=https://id.grava.io go test -tags live -v ./internal/idp/
+//	CALLOUT_ZITADEL_ISSUER_URL=https://id.grava.io go test -tags live -v ./internal/idp/
 //
-// Con un token a mano, además se verifica el camino completo de validación:
+// With a token at hand, the full validation path is verified as well:
 //
-//	GESTION_ZITADEL_ISSUER_URL=https://id.grava.io \
-//	GESTION_TEST_TOKEN="$(./scripts/zitadel-token.sh secrets/poc-service.json)" \
+//	CALLOUT_ZITADEL_ISSUER_URL=https://id.grava.io \
+//	CALLOUT_TEST_TOKEN="$(./scripts/zitadel-token.sh secrets/poc-service.json)" \
 //	  go test -tags live -v ./internal/idp/
 package idp
 
@@ -20,18 +20,18 @@ import (
 	"time"
 )
 
-// issuerFromEnv devuelve el issuer a probar, o saltea el test si no está configurado.
+// issuerFromEnv returns the issuer to test against, or skips the test if it is not configured.
 func issuerFromEnv(t *testing.T) string {
 	t.Helper()
-	issuer := os.Getenv("GESTION_ZITADEL_ISSUER_URL")
+	issuer := os.Getenv("CALLOUT_ZITADEL_ISSUER_URL")
 	if issuer == "" {
-		t.Skip("falta GESTION_ZITADEL_ISSUER_URL")
+		t.Skip("CALLOUT_ZITADEL_ISSUER_URL is not set")
 	}
 	return issuer
 }
 
-// Verifica lo que rompía en el POC: que el JWKS se resuelva por OIDC discovery. Una
-// instancia self-hosted lo sirve en /oauth/v2/keys, no en /.well-known/jwks.json.
+// Verifies what used to break in the PoC: that the JWKS resolves through OIDC discovery. A
+// self-hosted instance serves it at /oauth/v2/keys, not at /.well-known/jwks.json.
 func TestLiveDiscoveryResolvesJWKS(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -42,26 +42,27 @@ func TestLiveDiscoveryResolvesJWKS(t *testing.T) {
 	}
 	t.Logf("discovery OK — issuer=%s jwks=%s", verifier.issuer, verifier.jwksURL)
 
-	// Un token mal formado tiene que dar ErrInvalidToken y no un error de infraestructura:
-	// así se distingue "el cliente mandó cualquier cosa" de "Zitadel no responde".
-	if _, err := verifier.VerifyToken(ctx, "no.es.un.jwt"); !errors.Is(err, ErrInvalidToken) {
-		t.Fatalf("esperaba ErrInvalidToken, obtuve %v", err)
+	// A malformed token has to yield ErrInvalidToken rather than an infrastructure error: that
+	// is how "the client sent garbage" is told apart from "Zitadel is not responding".
+	if _, err := verifier.VerifyToken(ctx, "not.a.jwt"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("expected ErrInvalidToken, got %v", err)
 	}
 }
 
-// Con un token real, verifica el camino completo: firma, issuer, vigencia, y que salgan el
-// sub y los roles. Si esto pasa, el callout va a poder autenticar ese token.
+// With a real token, this verifies the full path: signature, issuer, lifetime, and that the
+// sub and the roles come out. If this passes, the callout will be able to authenticate that
+// token.
 func TestLiveVerifyToken(t *testing.T) {
-	token := os.Getenv("GESTION_TEST_TOKEN")
+	token := os.Getenv("CALLOUT_TEST_TOKEN")
 	if token == "" {
-		t.Skip("falta GESTION_TEST_TOKEN")
+		t.Skip("CALLOUT_TEST_TOKEN is not set")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	verifier, err := NewZitadel(ctx, issuerFromEnv(t),
-		WithProjectID(os.Getenv("GESTION_ZITADEL_PROJECT_ID")),
+		WithProjectID(os.Getenv("CALLOUT_ZITADEL_PROJECT_ID")),
 	)
 	if err != nil {
 		t.Fatalf("NewZitadel: %v", err)
@@ -72,16 +73,16 @@ func TestLiveVerifyToken(t *testing.T) {
 		t.Fatalf("VerifyToken: %v", err)
 	}
 
-	t.Logf("sub=%s username=%q roles=%v expira=%s",
+	t.Logf("sub=%s username=%q roles=%v expires=%s",
 		claims.Subject, claims.Username, claims.Roles, claims.ExpiresAt.Format(time.RFC3339))
 
 	if claims.Subject == "" {
-		t.Fatal("el token no trae sub")
+		t.Fatal("the token carries no sub")
 	}
-	// Sin roles el callout no puede matchear ninguna regla, así que este es el fallo que
-	// más conviene detectar acá y no en el handshake de NATS.
+	// With no roles the callout cannot match any rule, so this is the failure most worth
+	// catching here rather than in the NATS handshake.
 	if len(claims.Roles) == 0 {
-		t.Fatal("el token no trae roles: falta el scope urn:zitadel:iam:org:projects:roles, " +
-			"o el rol no está concedido al usuario en el proyecto")
+		t.Fatal("the token carries no roles: the urn:zitadel:iam:org:projects:roles scope is " +
+			"missing, or the role is not granted to the user in the project")
 	}
 }

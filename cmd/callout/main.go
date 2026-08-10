@@ -1,8 +1,8 @@
-// Command callout es el servicio de auth callout de gestión: autentica las conexiones a
-// NATS contra Zitadel y le mintea a cada una los permisos que le corresponden por rol.
+// Command callout is the NATS auth callout service: it authenticates NATS connections
+// against Zitadel and mints for each one the permissions its role entitles it to.
 //
-// Un solo proceso, una sola conexión: atiende la cuenta AUTH con las creds del
-// sentinel-handler y mintea User JWTs hacia la cuenta APP.
+// One process, one connection: it serves the AUTH account with the sentinel-handler creds and
+// mints User JWTs toward the APP account.
 package main
 
 import (
@@ -17,13 +17,13 @@ import (
 	"github.com/nats-io/nkeys"
 	"github.com/rs/zerolog"
 
-	"github.com/grava/gestion/auth-callout/internal/authz"
-	"github.com/grava/gestion/auth-callout/internal/callout"
-	"github.com/grava/gestion/auth-callout/internal/config"
-	"github.com/grava/gestion/auth-callout/internal/idp"
+	"github.com/gravadigital/nats-zitadel-auth-callout/internal/authz"
+	"github.com/gravadigital/nats-zitadel-auth-callout/internal/callout"
+	"github.com/gravadigital/nats-zitadel-auth-callout/internal/config"
+	"github.com/gravadigital/nats-zitadel-auth-callout/internal/idp"
 )
 
-// natsConnectTimeout acota el arranque: sin NATS el servicio no tiene nada que hacer.
+// natsConnectTimeout bounds startup: with no NATS the service has nothing to do.
 const natsConnectTimeout = 10 * time.Second
 
 func main() {
@@ -41,16 +41,16 @@ func run() error {
 
 	log := newLogger(cfg.LogLevel)
 
-	// El modo de IdP se loguea primero y bien visible: es la diferencia entre validar
-	// contra Zitadel y aceptar cualquier identidad que el cliente diga tener.
+	// The IdP mode is logged first and prominently: it is the difference between validating
+	// against Zitadel and accepting any identity the client claims to have.
 	log.Info().
 		Str("idp", cfg.IDPMode).
 		Str("instance", cfg.Instance).
 		Str("nats", cfg.NATSURL).
 		Str("rules", cfg.RulesPath).
-		Msg("iniciando auth-callout de gestión")
+		Msg("starting nats-zitadel-auth-callout")
 	if cfg.IDPMode == config.IDPModeMock {
-		log.Warn().Msg("IdP en modo MOCK: cualquier token bien formado se acepta. No usar en producción.")
+		log.Warn().Msg("IdP in MOCK mode: any well-formed token is accepted. Do not use in production.")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -68,43 +68,43 @@ func run() error {
 
 	appSigningKey, err := callout.LoadKeyPair(cfg.AppAccountSigningKeySeed)
 	if err != nil {
-		return fmt.Errorf("signing key de la cuenta APP: %w", err)
+		return fmt.Errorf("APP account signing key: %w", err)
 	}
 	authSigningKey, err := callout.LoadKeyPair(cfg.AuthAccountSigningKeySeed)
 	if err != nil {
-		return fmt.Errorf("signing key de la cuenta AUTH: %w", err)
+		return fmt.Errorf("AUTH account signing key: %w", err)
 	}
 	appAccountPub, err := callout.ReadPubKey(cfg.AppAccountPubKey)
 	if err != nil {
-		return fmt.Errorf("pubkey de la cuenta APP: %w", err)
+		return fmt.Errorf("APP account pubkey: %w", err)
 	}
 
 	var xkey nkeys.KeyPair
 	if cfg.XKeySeed != "" {
 		xkey, err = callout.LoadCurveKeyPair(cfg.XKeySeed)
 		if err != nil {
-			return fmt.Errorf("XKey del callout: %w", err)
+			return fmt.Errorf("callout XKey: %w", err)
 		}
 	} else {
-		log.Warn().Msg("sin XKey: los requests de callout viajan en claro")
+		log.Warn().Msg("no XKey: callout requests travel in the clear")
 	}
 
 	nc, err := nats.Connect(cfg.NATSURL,
 		nats.UserCredentials(cfg.HandlerCreds),
-		nats.Name("gestion-auth-callout"),
+		nats.Name("nats-zitadel-auth-callout"),
 		nats.Timeout(natsConnectTimeout),
 		nats.MaxReconnects(-1),
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
-			log.Warn().Err(err).Msg("NATS desconectado")
+			log.Warn().Err(err).Msg("NATS disconnected")
 		}),
 		nats.ReconnectHandler(func(c *nats.Conn) {
-			log.Info().Str("url", c.ConnectedUrl()).Msg("NATS reconectado")
+			log.Info().Str("url", c.ConnectedUrl()).Msg("NATS reconnected")
 		}),
 	)
 	if err != nil {
-		return fmt.Errorf("conectar a NATS: %w", err)
+		return fmt.Errorf("connect to NATS: %w", err)
 	}
-	defer nc.Drain() //nolint:errcheck // en el camino de salida no hay a quién reportarle
+	defer nc.Drain() //nolint:errcheck // on the way out there is nobody to report to
 
 	svc, err := callout.New(callout.Config{
 		Conn:           nc,
@@ -123,14 +123,14 @@ func run() error {
 	if err := svc.Start(); err != nil {
 		return err
 	}
-	defer svc.Stop() //nolint:errcheck // ídem
+	defer svc.Stop() //nolint:errcheck // ditto
 
 	<-ctx.Done()
-	log.Info().Msg("apagando")
+	log.Info().Msg("shutting down")
 	return nil
 }
 
-// buildVerifier arma el verificador de tokens según el modo configurado.
+// buildVerifier builds the token verifier according to the configured mode.
 func buildVerifier(ctx context.Context, cfg *config.Config, log *zerolog.Logger) (idp.Verifier, error) {
 	if cfg.IDPMode == config.IDPModeMock {
 		return idp.NewMock(), nil
@@ -141,17 +141,17 @@ func buildVerifier(ctx context.Context, cfg *config.Config, log *zerolog.Logger)
 		idp.WithUsernameEnrichment(true),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("inicializar Zitadel: %w", err)
+		return nil, fmt.Errorf("initialize Zitadel: %w", err)
 	}
 	log.Info().
 		Str("issuer", cfg.ZitadelIssuerURL).
 		Str("projectId", cfg.ZitadelProjectID).
-		Msg("Zitadel listo (JWKS por OIDC discovery)")
+		Msg("Zitadel ready (JWKS through OIDC discovery)")
 	return verifier, nil
 }
 
-// newLogger arma el logger. Sale a stderr en formato consola: el servicio corre en
-// contenedor y es el runtime el que decide qué hacer con el stream.
+// newLogger builds the logger. It writes to stderr in console format: the service runs in a
+// container and it is the runtime that decides what to do with the stream.
 func newLogger(level string) zerolog.Logger {
 	parsed, err := zerolog.ParseLevel(level)
 	if err != nil || parsed == zerolog.NoLevel {

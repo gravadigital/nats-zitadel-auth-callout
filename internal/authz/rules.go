@@ -9,104 +9,104 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// MatchAny es el `match` catch-all: aplica a cualquier identidad autenticada cuyos roles
-// no matchearon una regla anterior.
+// MatchAny is the catch-all `match`: it applies to any authenticated identity whose roles
+// did not match an earlier rule.
 const MatchAny = "*"
 
-// Errores de routing.
+// Routing errors.
 var (
-	// ErrNoRuleMatched se devuelve cuando ningún rol del token matchea una regla y no
-	// hay catch-all. Es un rechazo deliberado: sin regla no hay permisos que minteear.
-	ErrNoRuleMatched = errors.New("authz: ningún rol del token matchea una regla y no hay catch-all")
-	// ErrInvalidUserType marca una regla con un `type` que no es person ni service.
-	ErrInvalidUserType = errors.New("authz: `type` inválido en la regla")
-	// ErrEmptyTemplate marca una regla sin plantilla.
-	ErrEmptyTemplate = errors.New("authz: falta `template` en la regla")
-	// ErrServiceNameRequired marca una regla de servicio sin nombre de servicio. El
-	// nombre es la sesión del servicio, así que sin él no se puede armar la identidad.
-	ErrServiceNameRequired = errors.New("authz: una regla `type: service` necesita `service`")
-	// ErrServiceNameOnPerson marca una regla de persona que declara `service`. Es casi
-	// siempre un `type` mal puesto, así que se rechaza en vez de ignorarse.
-	ErrServiceNameOnPerson = errors.New("authz: `service` no aplica a una regla `type: person`")
+	// ErrNoRuleMatched is returned when no role in the token matches a rule and there is no
+	// catch-all. It is a deliberate rejection: with no rule there are no permissions to mint.
+	ErrNoRuleMatched = errors.New("authz: no role in the token matches a rule and there is no catch-all")
+	// ErrInvalidUserType flags a rule whose `type` is neither person nor service.
+	ErrInvalidUserType = errors.New("authz: invalid `type` in rule")
+	// ErrEmptyTemplate flags a rule with no template.
+	ErrEmptyTemplate = errors.New("authz: missing `template` in rule")
+	// ErrServiceNameRequired flags a service rule with no service name. The name is the
+	// service's endpoint, so without it the identity cannot be assembled.
+	ErrServiceNameRequired = errors.New("authz: a `type: service` rule needs `service`")
+	// ErrServiceNameOnPerson flags a person rule that declares `service`. It is almost
+	// always a misplaced `type`, so it is rejected instead of ignored.
+	ErrServiceNameOnPerson = errors.New("authz: `service` does not apply to a `type: person` rule")
 )
 
-// Rule es una regla de routing: un rol de Zitadel -> qué tipo de identidad es y qué
-// plantilla de permisos le corresponde.
+// Rule is a routing rule: a Zitadel role -> which kind of identity it is and which
+// permission template belongs to it.
 type Rule struct {
-	// Match es el nombre del rol tal como viaja en el token, o "*" para el catch-all.
+	// Match is the role name exactly as it travels in the token, or "*" for the catch-all.
 	Match string `yaml:"match"`
-	// Type es person o service. Decide cómo se deriva la sesión.
+	// Type is person or service. It decides how the identity is derived.
 	Type UserType `yaml:"type"`
-	// Service es el nombre del servicio, obligatorio (y solo válido) si Type es service.
-	// Es la sesión del servicio y el endpoint que atiende: `<instancia>.*.<service>.>`.
+	// Service is the service name, required (and only valid) when Type is service. It is
+	// the service's endpoint, the one it serves: `<instance>.*.<service>.>`.
 	Service string `yaml:"service"`
-	// Template es el path de la plantilla, relativo al directorio del rules.yaml.
+	// Template is the template path, relative to the directory holding rules.yaml.
 	Template string `yaml:"template"`
 }
 
-// RulesConfig es el contenido de config/rules.yaml.
+// RulesConfig is the content of config/rules.yaml.
 //
-// El routing depende SOLO del rol: no hay heurística que adivine si un token es de una
-// persona o de un servicio. Lo declara la regla, y el rol lo asigna quien administra
-// Zitadel. Eso hace que la pregunta "¿qué permisos tiene X?" se conteste leyendo dos
-// archivos, sin ejecutar nada.
+// Routing depends ONLY on the role: there is no heuristic guessing whether a token belongs
+// to a person or to a service. The rule declares it, and whoever administers Zitadel
+// assigns the role. That makes the question "what permissions does X have?" answerable by
+// reading two files, without running anything.
 type RulesConfig struct {
 	Version int    `yaml:"version"`
 	Rules   []Rule `yaml:"rules"`
 }
 
-// LoadRulesConfig lee y parsea un rules.yaml.
+// LoadRulesConfig reads and parses a rules.yaml.
 func LoadRulesConfig(path string) (*RulesConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("authz: leer rules %q: %w", path, err)
+		return nil, fmt.Errorf("authz: read rules %q: %w", path, err)
 	}
 	var cfg RulesConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("authz: parsear rules %q: %w", path, err)
+		return nil, fmt.Errorf("authz: parse rules %q: %w", path, err)
 	}
 	return &cfg, nil
 }
 
-// resolvedRule es una regla con su plantilla ya cargada y validada.
+// resolvedRule is a rule with its template already loaded and validated.
 type resolvedRule struct {
 	Rule
 	template     *Template
 	templatePath string
 }
 
-// Router elige la regla de cada request y expande su plantilla. Es inmutable después de
-// construirse, así que es seguro usarlo concurrentemente.
+// Router picks the rule for each request and expands its template. It is immutable after
+// construction, so it is safe for concurrent use.
 type Router struct {
 	instance string
 	rules    []resolvedRule
 }
 
-// NewRouter construye un Router desde una config de reglas. Las plantillas se cargan y
-// validan acá: si alguna falta, no parsea o usa un placeholder inexistente, el arranque
-// falla. Es intencional — es mejor no arrancar que autenticar con permisos rotos.
+// NewRouter builds a Router from a rules config. Templates are loaded and validated here:
+// if one is missing, fails to parse or uses a non-existent placeholder, startup fails. That
+// is intentional — better not to start at all than to authenticate with broken permissions.
 func NewRouter(cfg *RulesConfig, configDir, instance string) (*Router, error) {
 	if instance == "" {
-		return nil, errors.New("authz: la instancia no puede estar vacía")
+		return nil, errors.New("authz: instance cannot be empty")
 	}
 
 	r := &Router{instance: instance}
 
-	// Una misma plantilla puede aparecer en varias reglas; se carga una sola vez.
+	// The same template may appear in several rules; it is loaded only once.
 	cache := make(map[string]*Template)
 
 	for i, rule := range cfg.Rules {
 		if !rule.Type.IsValid() {
-			return nil, fmt.Errorf("%w: regla %d (match=%q): %q", ErrInvalidUserType, i, rule.Match, rule.Type)
+			return nil, fmt.Errorf("%w: rule %d (match=%q): %q", ErrInvalidUserType, i, rule.Match, rule.Type)
 		}
 		if rule.Template == "" {
-			return nil, fmt.Errorf("%w: regla %d (match=%q)", ErrEmptyTemplate, i, rule.Match)
+			return nil, fmt.Errorf("%w: rule %d (match=%q)", ErrEmptyTemplate, i, rule.Match)
 		}
 		if rule.Type == UserTypeService && rule.Service == "" {
-			return nil, fmt.Errorf("%w: regla %d (match=%q)", ErrServiceNameRequired, i, rule.Match)
+			return nil, fmt.Errorf("%w: rule %d (match=%q)", ErrServiceNameRequired, i, rule.Match)
 		}
 		if rule.Type == UserTypePerson && rule.Service != "" {
-			return nil, fmt.Errorf("%w: regla %d (match=%q)", ErrServiceNameOnPerson, i, rule.Match)
+			return nil, fmt.Errorf("%w: rule %d (match=%q)", ErrServiceNameOnPerson, i, rule.Match)
 		}
 
 		path := rule.Template
@@ -118,7 +118,7 @@ func NewRouter(cfg *RulesConfig, configDir, instance string) (*Router, error) {
 		if !ok {
 			loaded, err := LoadTemplate(path)
 			if err != nil {
-				return nil, fmt.Errorf("authz: regla %d (match=%q): %w", i, rule.Match, err)
+				return nil, fmt.Errorf("authz: rule %d (match=%q): %w", i, rule.Match, err)
 			}
 			cache[path] = loaded
 			tmpl = loaded
@@ -128,14 +128,14 @@ func NewRouter(cfg *RulesConfig, configDir, instance string) (*Router, error) {
 	}
 
 	if len(r.rules) == 0 {
-		return nil, errors.New("authz: rules.yaml no declara ninguna regla")
+		return nil, errors.New("authz: rules.yaml declares no rules")
 	}
 
 	return r, nil
 }
 
-// NewRouterFromFile carga rules.yaml de un path y resuelve las plantillas relativas al
-// directorio que lo contiene.
+// NewRouterFromFile loads rules.yaml from a path and resolves the templates relative to the
+// directory containing it.
 func NewRouterFromFile(rulesPath, instance string) (*Router, error) {
 	cfg, err := LoadRulesConfig(rulesPath)
 	if err != nil {
@@ -144,9 +144,8 @@ func NewRouterFromFile(rulesPath, instance string) (*Router, error) {
 	return NewRouter(cfg, filepath.Dir(rulesPath), instance)
 }
 
-// Match elige la primera regla cuyo `match` sea el catch-all o coincida con alguno de
-// los roles del token. First-match-wins por orden del archivo: las reglas específicas
-// van arriba y el `*` al final.
+// Match picks the first rule whose `match` is the catch-all or matches one of the token's
+// roles. First-match-wins in file order: specific rules go on top and `*` at the end.
 func (r *Router) Match(roles []string) (Rule, string, bool) {
 	present := make(map[string]struct{}, len(roles))
 	for _, role := range roles {
@@ -163,32 +162,33 @@ func (r *Router) Match(roles []string) (Rule, string, bool) {
 	return Rule{}, "", false
 }
 
-// Decision registra POR QUÉ una conexión recibió los permisos que recibió. Va al log de
-// cada autenticación: sin el rol que ganó, un token con varios roles deja el log ambiguo.
+// Decision records WHY a connection received the permissions it received. It goes into the
+// log line of every authentication: without the winning role, a token carrying several
+// roles leaves the log ambiguous.
 type Decision struct {
-	// Rule es el `match` de la regla que ganó (el nombre del rol, o "*").
+	// Rule is the `match` of the winning rule (the role name, or "*").
 	Rule string
-	// Template es el path de la plantilla que se expandió.
+	// Template is the path of the template that was expanded.
 	Template string
-	// IdentityModel es el `type` de la regla: person o service. Es el MODELO DE IDENTIDAD
-	// que se aplicó, no la clase de usuario que sea en Zitadel — un machine user con un rol
-	// declarado `type: person` recibe identidad de persona, y es a propósito.
+	// IdentityModel is the rule's `type`: person or service. It is the IDENTITY MODEL that
+	// was applied, not the class of user in Zitadel — a machine user whose role is declared
+	// `type: person` receives a person identity, and that is on purpose.
 	IdentityModel UserType
 }
 
-// Resolve es el camino completo: de los roles del token a la identidad y los permisos.
+// Resolve is the whole path: from the token's roles to the identity and the permissions.
 //
-// subject es el `sub` del token y username el nombre legible (puede venir vacío).
+// subject is the token's `sub` and username the human-readable name (which may be empty).
 func (r *Router) Resolve(roles []string, subject, username string) (Identity, *Permissions, Decision, error) {
 	rule, templatePath, ok := r.Match(roles)
 	if !ok {
 		return Identity{}, nil, Decision{}, ErrNoRuleMatched
 	}
 
-	// El user id es el `sub` del token, igual para persona y para servicio: los dos son
-	// usuarios de Zitadel. Lo que agrega un servicio es su NOMBRE de endpoint, que es
-	// otra cosa (varias réplicas comparten endpoint a propósito —así NATS balancea con
-	// queue groups— pero cada una conecta con el user id del service user).
+	// The user id is the token's `sub`, the same for a person and for a service: both are
+	// Zitadel users. What a service adds is its endpoint NAME, which is a different thing
+	// (several replicas share an endpoint on purpose — that is how NATS balances with queue
+	// groups — but each one connects with the service user's user id).
 	id := Identity{
 		Instance: r.instance,
 		Type:     rule.Type,
@@ -199,7 +199,7 @@ func (r *Router) Resolve(roles []string, subject, username string) (Identity, *P
 		id.Service = rule.Service
 	}
 
-	// La plantilla se buscó por path en el cache del router, así que acá siempre existe.
+	// The template was looked up by path in the router's cache, so it always exists here.
 	var tmpl *Template
 	for _, resolved := range r.rules {
 		if resolved.templatePath == templatePath {
@@ -210,7 +210,7 @@ func (r *Router) Resolve(roles []string, subject, username string) (Identity, *P
 
 	perms, err := tmpl.Expand(id)
 	if err != nil {
-		return Identity{}, nil, Decision{}, fmt.Errorf("authz: expandir %q para match=%q: %w", templatePath, rule.Match, err)
+		return Identity{}, nil, Decision{}, fmt.Errorf("authz: expand %q for match=%q: %w", templatePath, rule.Match, err)
 	}
 
 	decision := Decision{

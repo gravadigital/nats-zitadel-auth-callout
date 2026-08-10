@@ -8,13 +8,13 @@ import (
 	"github.com/nats-io/nkeys"
 )
 
-// LoadKeyPair resuelve un nkey a partir de un valor de configuración que puede ser la
-// seed misma o el path a un archivo que la contiene.
+// LoadKeyPair resolves an nkey from a configuration value that may be either the seed itself
+// or the path to a file containing it.
 //
-// Se aceptan las dos formas porque conviven dos estilos de deploy: el bootstrap escribe
-// las seeds a archivos (que se montan como secretos), mientras que un orquestador suele
-// inyectarlas como variables de entorno. Distinguirlas por el prefijo de la seed evita
-// tener dos variables por clave.
+// Both forms are accepted because two deployment styles coexist: the bootstrap writes the
+// seeds to files (mounted as secrets), whereas an orchestrator usually injects them as
+// environment variables. Telling them apart by the seed's prefix avoids having two variables
+// per key.
 func LoadKeyPair(seedOrPath string) (nkeys.KeyPair, error) {
 	seed, err := resolveSeed(seedOrPath)
 	if err != nil {
@@ -22,12 +22,12 @@ func LoadKeyPair(seedOrPath string) (nkeys.KeyPair, error) {
 	}
 	kp, err := nkeys.FromSeed([]byte(seed))
 	if err != nil {
-		return nil, fmt.Errorf("callout: seed inválida: %w", err)
+		return nil, fmt.Errorf("callout: invalid seed: %w", err)
 	}
 	return kp, nil
 }
 
-// LoadCurveKeyPair resuelve un par curve25519 (XKey), cuya seed empieza con SX.
+// LoadCurveKeyPair resolves a curve25519 pair (XKey), whose seed starts with SX.
 func LoadCurveKeyPair(seedOrPath string) (nkeys.KeyPair, error) {
 	seed, err := resolveSeed(seedOrPath)
 	if err != nil {
@@ -35,19 +35,19 @@ func LoadCurveKeyPair(seedOrPath string) (nkeys.KeyPair, error) {
 	}
 	kp, err := nkeys.FromCurveSeed([]byte(seed))
 	if err != nil {
-		return nil, fmt.Errorf("callout: seed de XKey inválida: %w", err)
+		return nil, fmt.Errorf("callout: invalid XKey seed: %w", err)
 	}
 	return kp, nil
 }
 
-// resolveSeed devuelve la seed, leyéndola del archivo si lo que se pasó es un path.
+// resolveSeed returns the seed, reading it from the file if what was passed is a path.
 //
-// Una seed nkey siempre empieza con `S` y no tiene separadores de path, así que el
-// prefijo alcanza para distinguirla sin tocar el filesystem.
+// An nkey seed always starts with `S` and contains no path separators, so the prefix is
+// enough to tell them apart without touching the filesystem.
 func resolveSeed(seedOrPath string) (string, error) {
 	value := strings.TrimSpace(seedOrPath)
 	if value == "" {
-		return "", fmt.Errorf("callout: seed vacía")
+		return "", fmt.Errorf("callout: empty seed")
 	}
 
 	if strings.HasPrefix(value, "S") && !strings.ContainsAny(value, "/\\") {
@@ -56,25 +56,25 @@ func resolveSeed(seedOrPath string) (string, error) {
 
 	data, err := os.ReadFile(value)
 	if err != nil {
-		return "", fmt.Errorf("callout: leer la seed de %q: %w", value, err)
+		return "", fmt.Errorf("callout: read the seed from %q: %w", value, err)
 	}
 	return strings.TrimSpace(string(data)), nil
 }
 
-// ReadPubKey lee una pubkey de cuenta, aceptando igual que LoadKeyPair el valor directo
-// o un path.
+// ReadPubKey reads an account public key, accepting — just like LoadKeyPair — either the
+// value directly or a path.
 func ReadPubKey(valueOrPath string) (string, error) {
 	value := strings.TrimSpace(valueOrPath)
 	if value == "" {
-		return "", fmt.Errorf("callout: pubkey vacía")
+		return "", fmt.Errorf("callout: empty pubkey")
 	}
-	// Una pubkey de cuenta empieza con `A`.
+	// An account public key starts with `A`.
 	if strings.HasPrefix(value, "A") && !strings.ContainsAny(value, "/\\") {
 		return value, nil
 	}
 	data, err := os.ReadFile(value)
 	if err != nil {
-		return "", fmt.Errorf("callout: leer la pubkey de %q: %w", value, err)
+		return "", fmt.Errorf("callout: read the pubkey from %q: %w", value, err)
 	}
 	return strings.TrimSpace(string(data)), nil
 }

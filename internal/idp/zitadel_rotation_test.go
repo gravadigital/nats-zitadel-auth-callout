@@ -19,16 +19,16 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwt"
 )
 
-// Estos tests cubren la rotación de claves de Zitadel: el caso en que el IdP empieza a
-// firmar con una `kid` que el cache todavía no tiene.
+// These tests cover Zitadel key rotation: the case where the IdP starts signing with a `kid`
+// the cache does not have yet.
 //
-// Sin refetch on-demand, esa ventana dura hasta el refresco periódico siguiente (15 min) y
-// se rechazan tokens perfectamente válidos. Es un fallo que en producción se ve como
-// `Authorization Violation` genérico del lado del cliente, así que conviene tenerlo fijado
-// acá y no depender de reproducirlo contra Zitadel real.
+// Without the on-demand refetch, that window lasts until the next periodic refresh (15 min)
+// and perfectly valid tokens are rejected. In production the failure shows up as a generic
+// `Authorization Violation` on the client side, so it is worth pinning down here rather than
+// relying on reproducing it against real Zitadel.
 
-// jwksServer es un JWKS de mentira que imita a Zitadel: sirve un set de claves que se puede
-// cambiar en caliente y cuenta cuántas veces se lo pidieron.
+// jwksServer is a fake JWKS that mimics Zitadel: it serves a key set that can be swapped at
+// runtime and counts how many times it was requested.
 type jwksServer struct {
 	*httptest.Server
 	mu   sync.Mutex
@@ -46,9 +46,9 @@ func newJWKSServer(t *testing.T, keys ...jwk.Key) *jwksServer {
 	})
 	mux.HandleFunc("/oauth/v2/keys", func(w http.ResponseWriter, _ *http.Request) {
 		js.hits.Add(1)
-		// Los mismos headers que responde Zitadel: sin `max-age` del que agarrarse, httprc
-		// cae al piso de WithMinRefreshInterval. Están acá para que el test ejercite el
-		// mismo camino que producción.
+		// The same headers Zitadel responds with: with no `max-age` to latch onto, httprc falls
+		// back to the WithMinRefreshInterval floor. They are here so the test exercises the same
+		// path as production.
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Expires", "Thu, 01 Jan 1970 00:00:00 GMT")
 		w.Write(js.publicSet(t))
@@ -59,8 +59,8 @@ func newJWKSServer(t *testing.T, keys ...jwk.Key) *jwksServer {
 	return js
 }
 
-// serve cambia las claves que publica el JWKS. Zitadel ACUMULA durante una rotación (la
-// vieja y la nueva conviven), y los tests lo reproducen pasando ambas.
+// serve swaps the keys the JWKS publishes. Zitadel ACCUMULATES during a rotation (the old and
+// the new coexist), and the tests reproduce that by passing both.
 func (js *jwksServer) serve(keys ...jwk.Key) {
 	js.mu.Lock()
 	defer js.mu.Unlock()
@@ -76,40 +76,40 @@ func (js *jwksServer) publicSet(t *testing.T) []byte {
 	for _, k := range js.keys {
 		pub, err := k.PublicKey()
 		if err != nil {
-			t.Fatalf("derivar la clave pública: %v", err)
+			t.Fatalf("derive the public key: %v", err)
 		}
 		if err := set.AddKey(pub); err != nil {
-			t.Fatalf("agregar la clave al set: %v", err)
+			t.Fatalf("add the key to the set: %v", err)
 		}
 	}
 	body, err := json.Marshal(set)
 	if err != nil {
-		t.Fatalf("serializar el JWKS: %v", err)
+		t.Fatalf("serialize the JWKS: %v", err)
 	}
 	return body
 }
 
-// newSigningKey genera una clave RSA de firma con el `kid` dado.
+// newSigningKey generates an RSA signing key with the given `kid`.
 func newSigningKey(t *testing.T, kid string) jwk.Key {
 	t.Helper()
 	raw, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		t.Fatalf("generar RSA: %v", err)
+		t.Fatalf("generate RSA: %v", err)
 	}
 	key, err := jwk.FromRaw(raw)
 	if err != nil {
 		t.Fatalf("jwk.FromRaw: %v", err)
 	}
 	if err := key.Set(jwk.KeyIDKey, kid); err != nil {
-		t.Fatalf("fijar kid: %v", err)
+		t.Fatalf("set kid: %v", err)
 	}
 	if err := key.Set(jwk.AlgorithmKey, jwa.RS256); err != nil {
-		t.Fatalf("fijar alg: %v", err)
+		t.Fatalf("set alg: %v", err)
 	}
 	return key
 }
 
-// signToken emite un access token válido firmado con key.
+// signToken issues a valid access token signed with key.
 func signToken(t *testing.T, key jwk.Key, issuer string) string {
 	t.Helper()
 	tok, err := jwt.NewBuilder().
@@ -119,21 +119,21 @@ func signToken(t *testing.T, key jwk.Key, issuer string) string {
 		Expiration(time.Now().Add(time.Hour)).
 		Build()
 	if err != nil {
-		t.Fatalf("armar el token: %v", err)
+		t.Fatalf("build the token: %v", err)
 	}
 	signed, err := jwt.Sign(tok, jwt.WithKey(jwa.RS256, key))
 	if err != nil {
-		t.Fatalf("firmar el token: %v", err)
+		t.Fatalf("sign the token: %v", err)
 	}
 	return string(signed)
 }
 
-// El caso del reporte: Zitadel empieza a firmar con una clave nueva y el cache no la tiene.
-// Antes del arreglo esto fallaba hasta el refresco siguiente; ahora el refetch on-demand lo
-// resuelve en el mismo intento.
+// The reported case: Zitadel starts signing with a new key and the cache does not have it.
+// Before the fix this failed until the next refresh; now the on-demand refetch resolves it
+// within the same attempt.
 func TestVerifyTokenRefetchesOnKeyRotation(t *testing.T) {
-	keyOld := newSigningKey(t, "kid-vieja")
-	keyNew := newSigningKey(t, "kid-nueva")
+	keyOld := newSigningKey(t, "kid-old")
+	keyNew := newSigningKey(t, "kid-new")
 
 	js := newJWKSServer(t, keyOld)
 	ctx := context.Background()
@@ -143,32 +143,32 @@ func TestVerifyTokenRefetchesOnKeyRotation(t *testing.T) {
 		t.Fatalf("NewZitadel: %v", err)
 	}
 
-	// Estado normal: la clave vigente verifica.
+	// Normal state: the current key verifies.
 	if _, err := z.VerifyToken(ctx, signToken(t, keyOld, js.URL)); err != nil {
-		t.Fatalf("el token con la clave vigente debería verificar: %v", err)
+		t.Fatalf("the token signed with the current key should verify: %v", err)
 	}
 
-	// Zitadel rota: ahora publica las dos y firma con la nueva.
+	// Zitadel rotates: it now publishes both and signs with the new one.
 	js.serve(keyOld, keyNew)
 
 	before := js.hits.Load()
 	claims, err := z.VerifyToken(ctx, signToken(t, keyNew, js.URL))
 	if err != nil {
-		t.Fatalf("tras la rotación el token debería verificar sin esperar el refresco: %v", err)
+		t.Fatalf("after the rotation the token should verify without waiting for the refresh: %v", err)
 	}
 	if claims.Subject != "385270818583609346" {
-		t.Fatalf("subject inesperado: %q", claims.Subject)
+		t.Fatalf("unexpected subject: %q", claims.Subject)
 	}
 	if js.hits.Load() <= before {
-		t.Fatal("se esperaba un refetch del JWKS ante la kid desconocida, no hubo ninguno")
+		t.Fatal("expected a JWKS refetch for the unknown kid, there was none")
 	}
 }
 
-// La clave vieja tiene que seguir verificando después de la rotación: Zitadel acumula, y los
-// tokens ya emitidos siguen vigentes hasta su `exp`.
+// The old key has to keep verifying after the rotation: Zitadel accumulates, and
+// already-issued tokens remain valid until their `exp`.
 func TestVerifyTokenAcceptsOldKeyAfterRotation(t *testing.T) {
-	keyOld := newSigningKey(t, "kid-vieja")
-	keyNew := newSigningKey(t, "kid-nueva")
+	keyOld := newSigningKey(t, "kid-old")
+	keyNew := newSigningKey(t, "kid-new")
 
 	js := newJWKSServer(t, keyOld, keyNew)
 	ctx := context.Background()
@@ -178,23 +178,23 @@ func TestVerifyTokenAcceptsOldKeyAfterRotation(t *testing.T) {
 		t.Fatalf("NewZitadel: %v", err)
 	}
 
-	for name, key := range map[string]jwk.Key{"vieja": keyOld, "nueva": keyNew} {
+	for name, key := range map[string]jwk.Key{"old": keyOld, "new": keyNew} {
 		if _, err := z.VerifyToken(ctx, signToken(t, key, js.URL)); err != nil {
-			t.Fatalf("el token firmado con la clave %s debería verificar: %v", name, err)
+			t.Fatalf("the token signed with the %s key should verify: %v", name, err)
 		}
 	}
 }
 
-// El rate limit: tokens con una `kid` inventada no pueden disparar un fetch al JWKS de
-// Zitadel por intento. Sin este freno, cualquiera —sin autenticarse— convierte al callout en
-// un amplificador de tráfico contra el IdP.
+// The rate limit: tokens with a made-up `kid` must not trigger a fetch against Zitadel's JWKS
+// on every attempt. Without this brake, anyone — without authenticating — turns the callout
+// into a traffic amplifier against the IdP.
 func TestVerifyTokenRateLimitsRefetch(t *testing.T) {
-	keyGood := newSigningKey(t, "kid-buena")
-	keyBogus := newSigningKey(t, "kid-inventada") // nunca se publica en el JWKS
+	keyGood := newSigningKey(t, "kid-good")
+	keyBogus := newSigningKey(t, "kid-made-up") // never published in the JWKS
 
 	js := newJWKSServer(t, keyGood)
 
-	// Reloj fijo: el cooldown nunca vence dentro del test.
+	// Frozen clock: the cooldown never elapses within the test.
 	frozen := time.Now()
 	ctx := context.Background()
 	z, err := NewZitadel(ctx, js.URL,
@@ -206,23 +206,23 @@ func TestVerifyTokenRateLimitsRefetch(t *testing.T) {
 	}
 
 	before := js.hits.Load()
-	const intentos = 20
-	for range intentos {
+	const attempts = 20
+	for range attempts {
 		if _, err := z.VerifyToken(ctx, signToken(t, keyBogus, js.URL)); err == nil {
-			t.Fatal("un token con kid desconocida no debe verificar")
+			t.Fatal("a token with an unknown kid must not verify")
 		}
 	}
 
 	if got := js.hits.Load() - before; got != 1 {
-		t.Fatalf("se esperaba exactamente 1 refetch para %d intentos, hubo %d", intentos, got)
+		t.Fatalf("expected exactly 1 refetch for %d attempts, there were %d", attempts, got)
 	}
 }
 
-// Pasado el cooldown vuelve a permitirse un refetch: el rate limit no puede dejar al callout
-// clavado en un JWKS viejo si la rotación ocurre justo después de un intento fallido.
+// Once the cooldown has elapsed a refetch is allowed again: the rate limit must not leave the
+// callout stuck on a stale JWKS if the rotation happens right after a failed attempt.
 func TestVerifyTokenRefetchesAgainAfterCooldown(t *testing.T) {
-	keyOld := newSigningKey(t, "kid-vieja")
-	keyNew := newSigningKey(t, "kid-nueva")
+	keyOld := newSigningKey(t, "kid-old")
+	keyNew := newSigningKey(t, "kid-new")
 
 	js := newJWKSServer(t, keyOld)
 
@@ -235,28 +235,28 @@ func TestVerifyTokenRefetchesAgainAfterCooldown(t *testing.T) {
 		t.Fatalf("NewZitadel: %v", err)
 	}
 
-	// Primer intento con una kid que no existe: consume el refetch del cooldown.
+	// First attempt with a kid that does not exist: it consumes the cooldown's refetch.
 	if _, err := z.VerifyToken(ctx, signToken(t, keyNew, js.URL)); err == nil {
-		t.Fatal("todavía no se publicó la clave nueva: no debería verificar")
+		t.Fatal("the new key has not been published yet: it should not verify")
 	}
 
-	// Ahora sí rota Zitadel, pero el cooldown sigue vigente.
+	// Now Zitadel does rotate, but the cooldown is still in effect.
 	js.serve(keyOld, keyNew)
 	if _, err := z.VerifyToken(ctx, signToken(t, keyNew, js.URL)); err == nil {
-		t.Fatal("dentro del cooldown no debería refetchear, así que aún no puede verificar")
+		t.Fatal("within the cooldown it should not refetch, so it still cannot verify")
 	}
 
-	// Vencido el cooldown, el refetch se vuelve a permitir y la clave nueva entra.
+	// With the cooldown elapsed, the refetch is allowed again and the new key comes in.
 	now = now.Add(jwksRefetchCooldown + time.Second)
 	if _, err := z.VerifyToken(ctx, signToken(t, keyNew, js.URL)); err != nil {
-		t.Fatalf("pasado el cooldown el token debería verificar: %v", err)
+		t.Fatalf("once the cooldown has elapsed the token should verify: %v", err)
 	}
 }
 
-// Un token vencido tiene que seguir reportándose como ErrExpiredToken y NO disparar un
-// refetch: su `kid` está en el JWKS, el problema es otro.
+// An expired token has to keep being reported as ErrExpiredToken and must NOT trigger a
+// refetch: its `kid` is in the JWKS, the problem is a different one.
 func TestVerifyTokenExpiredDoesNotRefetch(t *testing.T) {
-	key := newSigningKey(t, "kid-buena")
+	key := newSigningKey(t, "kid-good")
 	js := newJWKSServer(t, key)
 	ctx := context.Background()
 
@@ -271,48 +271,47 @@ func TestVerifyTokenExpiredDoesNotRefetch(t *testing.T) {
 		Expiration(time.Now().Add(-time.Hour)).
 		Build()
 	if err != nil {
-		t.Fatalf("armar el token: %v", err)
+		t.Fatalf("build the token: %v", err)
 	}
 	signed, err := jwt.Sign(expired, jwt.WithKey(jwa.RS256, key))
 	if err != nil {
-		t.Fatalf("firmar: %v", err)
+		t.Fatalf("sign: %v", err)
 	}
 
 	before := js.hits.Load()
 	_, err = z.VerifyToken(ctx, string(signed))
 	if !errors.Is(err, ErrExpiredToken) {
-		t.Fatalf("esperaba ErrExpiredToken, obtuve %v", err)
+		t.Fatalf("expected ErrExpiredToken, got %v", err)
 	}
 	if js.hits.Load() != before {
-		t.Fatal("un token vencido no debe disparar un refetch del JWKS")
+		t.Fatal("an expired token must not trigger a JWKS refetch")
 	}
 }
 
-// isUnknownKeyID detecta el caso por TEXTO porque jwx v2 no expone un error tipado. Este
-// test es el que avisa si una actualización de jwx cambia el mensaje: sin él, el refetch
-// dejaría de dispararse y volvería la ventana de rechazo, en silencio y sin fallar ningún
-// test.
-func TestUnknownKeyIDFragmentSigueVigente(t *testing.T) {
-	keyPublicada := newSigningKey(t, "kid-publicada")
-	keyAusente := newSigningKey(t, "kid-ausente")
+// isUnknownKeyID detects the case by TEXT because jwx v2 exposes no typed error. This test is
+// the one that warns if a jwx update changes the message: without it, the refetch would stop
+// firing and the rejection window would come back, silently and without failing any test.
+func TestUnknownKeyIDFragmentStillMatches(t *testing.T) {
+	keyPublished := newSigningKey(t, "kid-published")
+	keyAbsent := newSigningKey(t, "kid-absent")
 
-	js := newJWKSServer(t, keyPublicada)
+	js := newJWKSServer(t, keyPublished)
 	ctx := context.Background()
 
 	set, err := jwk.Fetch(ctx, js.URL+"/oauth/v2/keys")
 	if err != nil {
-		t.Fatalf("traer el JWKS: %v", err)
+		t.Fatalf("fetch the JWKS: %v", err)
 	}
 
 	z := &Zitadel{issuer: js.URL, now: time.Now}
-	_, err = z.parse(signToken(t, keyAusente, js.URL), set)
+	_, err = z.parse(signToken(t, keyAbsent, js.URL), set)
 	if err == nil {
-		t.Fatal("una kid ausente del JWKS no debería verificar")
+		t.Fatal("a kid absent from the JWKS should not verify")
 	}
 	if !isUnknownKeyID(err) {
-		t.Fatalf("jwx cambió el mensaje de 'kid desconocida': el refetch on-demand ya no se "+
-			"dispara y volvió la ventana de rechazo ante rotaciones.\n"+
-			"Actualizá errUnknownKeyIDFragment (%q) para que matchee: %v",
+		t.Fatalf("jwx changed its 'unknown kid' message: the on-demand refetch no longer fires "+
+			"and the rejection window on rotations is back.\n"+
+			"Update errUnknownKeyIDFragment (%q) so that it matches: %v",
 			errUnknownKeyIDFragment, err)
 	}
 }

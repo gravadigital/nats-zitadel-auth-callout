@@ -1,6 +1,6 @@
-# Makefile — auth-callout de gestión.
+# Makefile — nats-zitadel-auth-callout.
 #
-# `make` sin argumentos lista los targets.
+# `make` with no arguments lists the targets.
 
 SHELL := /bin/bash
 GOBIN := $(shell go env GOPATH)/bin
@@ -9,42 +9,42 @@ export PATH := $(PATH):$(GOBIN)
 .DEFAULT_GOAL := help
 
 .PHONY: help
-help: ## Lista los targets
+help: ## List the targets
 	@grep -hE '^[a-z][a-z0-9_-]*:.*?##' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: bootstrap
-bootstrap: ## Genera la identidad NATS (operator, cuentas, sentinelas, authcallout)
+bootstrap: ## Generate the NATS identity (operator, accounts, sentinels, authcallout)
 	@cd nats && [[ -f .env ]] || cp -n .env.example .env
 	@./nats/bootstrap.sh
 
 .PHONY: run
-run: bootstrap ## Levanta NATS + el callout en foreground
+run: bootstrap ## Bring up NATS + the callout in the foreground
 	@./scripts/run.sh
 
 .PHONY: build
-build: ## Compila el binario en bin/callout
+build: ## Compile the binary into bin/callout
 	@mkdir -p bin
 	go build -o bin/callout ./cmd/callout
 
 .PHONY: test
-test: ## Tests unitarios (incluye validar el config desplegable)
+test: ## Unit tests (includes validating the shippable config)
 	go test ./...
 
 .PHONY: test-live
-test-live: ## Verifica la conexión con Zitadel real (necesita GESTION_ZITADEL_ISSUER_URL)
-	@if [[ -z "$$GESTION_ZITADEL_ISSUER_URL" && -f nats/.env ]]; then set -a; . ./nats/.env; set +a; fi; \
-	if [[ -z "$$GESTION_ZITADEL_ISSUER_URL" ]]; then \
-		echo "falta GESTION_ZITADEL_ISSUER_URL (ponelo en nats/.env o en el entorno)"; exit 1; \
+test-live: ## Verify connectivity with real Zitadel (needs CALLOUT_ZITADEL_ISSUER_URL)
+	@if [[ -z "$$CALLOUT_ZITADEL_ISSUER_URL" && -f nats/.env ]]; then set -a; . ./nats/.env; set +a; fi; \
+	if [[ -z "$$CALLOUT_ZITADEL_ISSUER_URL" ]]; then \
+		echo "CALLOUT_ZITADEL_ISSUER_URL is not set (put it in nats/.env or in the environment)"; exit 1; \
 	fi; \
 	go test -tags live -count=1 -v -run TestLive ./internal/idp/
 
 .PHONY: test-e2e
-test-e2e: ## Suite de aceptación: levanta NATS + callout y prueba los flujos reales
+test-e2e: ## Acceptance suite: brings up NATS + callout and exercises the real flows
 	go test -tags e2e -count=1 -timeout 180s ./test/e2e/...
 
 .PHONY: fmt
-fmt: ## Formatea
+fmt: ## Format
 	gofmt -w $(shell find . -name '*.go' -not -path './vendor/*')
 
 .PHONY: vet
@@ -52,17 +52,17 @@ vet: ## go vet
 	go vet ./...
 
 .PHONY: ci
-ci: fmt-check vet test test-e2e ## Todo lo que corre CI
+ci: fmt-check vet test test-e2e ## Everything CI runs
 
 .PHONY: fmt-check
-fmt-check: ## Falla si hay algo sin formatear
+fmt-check: ## Fail if anything is unformatted
 	@out=$$(gofmt -l $$(find . -name '*.go' -not -path './vendor/*')); \
-	if [[ -n "$$out" ]]; then echo "sin formatear:"; echo "$$out"; exit 1; fi
+	if [[ -n "$$out" ]]; then echo "unformatted:"; echo "$$out"; exit 1; fi
 
 .PHONY: clean
-clean: ## Borra binarios y datos de JetStream (NO la identidad NATS)
+clean: ## Delete binaries and JetStream data (NOT the NATS identity)
 	rm -rf bin nats/data
 
 .PHONY: clean-identity
-clean-identity: ## Borra la identidad NATS generada — obliga a reemitir todas las creds
+clean-identity: ## Delete the generated NATS identity — forces reissuing every cred
 	rm -rf nats/out

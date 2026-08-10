@@ -9,14 +9,14 @@ import (
 	"time"
 )
 
-// personIdentity es una identidad de persona de prueba.
+// personIdentity is a test person identity.
 func personIdentity() Identity {
 	return Identity{Instance: "prod", UserID: "abc123", Type: UserTypePerson}
 }
 
-// serviceIdentity es una identidad de servicio de prueba. Un service user tiene su propio
-// user id (su `sub`) además del nombre de endpoint: son ejes distintos, así que acá llevan
-// valores distintos a propósito.
+// serviceIdentity is a test service identity. A service user has its own user id (its
+// `sub`) in addition to the endpoint name: they are distinct axes, so here they carry
+// different values on purpose.
 func serviceIdentity() Identity {
 	return Identity{Instance: "prod", UserID: "svc-sub-1", Service: "api", Type: UserTypeService}
 }
@@ -37,7 +37,7 @@ func TestExpandPlaceholders(t *testing.T) {
 
 	assertSubjects(t, "pub allow", perms.PubAllow, []string{"prod.abc123.api.>"})
 	assertSubjects(t, "pub deny", perms.PubDeny, []string{"prod.abc123.api.danger"})
-	// El inbox va bajo el HASH del user id, no bajo el user id crudo.
+	// The inbox goes under the HASH of the user id, not under the raw user id.
 	assertSubjects(t, "sub allow", perms.SubAllow, []string{"_INBOX." + HashUserID("abc123") + ".>"})
 }
 
@@ -58,80 +58,80 @@ func TestExpandUnknownPlaceholderFails(t *testing.T) {
 
 	_, err := tmpl.Expand(personIdentity())
 	if !errors.Is(err, ErrUnknownPlaceholder) {
-		t.Fatalf("esperaba ErrUnknownPlaceholder, obtuve %v", err)
+		t.Fatalf("expected ErrUnknownPlaceholder, got %v", err)
 	}
 }
 
-// Un placeholder desconocido no debe resolverse a vacío: eso produciría un subject con un
-// segmento faltante que nunca matchea, y el permiso quedaría inerte sin que nadie lo note.
+// An unknown placeholder must not resolve to empty: that would produce a subject with a
+// missing segment that never matches, leaving the permission inert without anyone noticing.
 func TestExpandUnknownPlaceholderDoesNotSilentlyDrop(t *testing.T) {
 	tmpl := &Template{Pub: SubjectSet{Allow: []string{"{{instance}}.{{nope}}.api.>"}}}
 
 	perms, err := tmpl.Expand(personIdentity())
 	if err == nil {
-		t.Fatalf("esperaba error, obtuve permisos %v", perms.PubAllow)
+		t.Fatalf("expected an error, got permissions %v", perms.PubAllow)
 	}
 }
 
 func TestExpandRejectsInvalidSubject(t *testing.T) {
 	cases := map[string][]string{
-		"segmento vacío": {"prod..api.>"},
-		"> no terminal":  {"prod.>.api"},
-		"subject vacío":  {""},
+		"empty segment":  {"prod..api.>"},
+		"non-terminal >": {"prod.>.api"},
+		"empty subject":  {""},
 	}
 	for name, subjects := range cases {
 		t.Run(name, func(t *testing.T) {
 			tmpl := &Template{Pub: SubjectSet{Allow: subjects}}
 			_, err := tmpl.Expand(personIdentity())
 			if !errors.Is(err, ErrInvalidSubject) {
-				t.Fatalf("esperaba ErrInvalidSubject, obtuve %v", err)
+				t.Fatalf("expected ErrInvalidSubject, got %v", err)
 			}
 		})
 	}
 }
 
 func TestResponseRule(t *testing.T) {
-	t.Run("ttl explícito", func(t *testing.T) {
+	t.Run("explicit ttl", func(t *testing.T) {
 		tmpl := &Template{Response: &ResponseRule{Max: 2, TTL: "45s"}}
 		perms, err := tmpl.Expand(personIdentity())
 		if err != nil {
 			t.Fatalf("Expand: %v", err)
 		}
 		if perms.RespMax != 2 || perms.RespTTL != 45*time.Second {
-			t.Fatalf("esperaba max=2 ttl=45s, obtuve max=%d ttl=%s", perms.RespMax, perms.RespTTL)
+			t.Fatalf("expected max=2 ttl=45s, got max=%d ttl=%s", perms.RespMax, perms.RespTTL)
 		}
 	})
 
-	t.Run("ttl por defecto", func(t *testing.T) {
+	t.Run("default ttl", func(t *testing.T) {
 		tmpl := &Template{Response: &ResponseRule{Max: 1}}
 		perms, err := tmpl.Expand(personIdentity())
 		if err != nil {
 			t.Fatalf("Expand: %v", err)
 		}
 		if perms.RespTTL != defaultResponseTTL {
-			t.Fatalf("esperaba el TTL por defecto %s, obtuve %s", defaultResponseTTL, perms.RespTTL)
+			t.Fatalf("expected the default TTL %s, got %s", defaultResponseTTL, perms.RespTTL)
 		}
 	})
 
-	t.Run("sin response no hay allow_responses", func(t *testing.T) {
+	t.Run("no response means no allow_responses", func(t *testing.T) {
 		perms, err := (&Template{}).Expand(personIdentity())
 		if err != nil {
 			t.Fatalf("Expand: %v", err)
 		}
 		if perms.RespMax != 0 {
-			t.Fatalf("esperaba RespMax=0, obtuve %d", perms.RespMax)
+			t.Fatalf("expected RespMax=0, got %d", perms.RespMax)
 		}
 	})
 }
 
 // --- KV -------------------------------------------------------------------------------
 //
-// Estos tests fijan el mapeo de acceso KV -> subjects de JetStream. Es la parte del
-// diseño más fácil de romper sin darse cuenta: un subject mal armado no falla al
-// arrancar, simplemente hace que el KV no funcione (o que funcione de más).
+// These tests pin down the KV access -> JetStream subject mapping. It is the part of the
+// design that is easiest to break without noticing: a malformed subject does not fail at
+// startup, it simply makes KV not work (or work too much).
 
 func TestKVReadSubjects(t *testing.T) {
-	tmpl := &Template{KV: []KVAccess{{Bucket: "gestion-catalog", Access: KVRead, Keys: ">"}}}
+	tmpl := &Template{KV: []KVAccess{{Bucket: "demo-catalog", Access: KVRead, Keys: ">"}}}
 
 	perms, err := tmpl.Expand(personIdentity())
 	if err != nil {
@@ -140,23 +140,23 @@ func TestKVReadSubjects(t *testing.T) {
 
 	assertSubjects(t, "pub", perms.PubAllow, []string{
 		jsAccountInfoSubject,
-		"$JS.API.STREAM.INFO.KV_gestion-catalog",
-		"$JS.API.DIRECT.GET.KV_gestion-catalog.$KV.gestion-catalog.>",
-		"$JS.API.STREAM.MSG.GET.KV_gestion-catalog",
+		"$JS.API.STREAM.INFO.KV_demo-catalog",
+		"$JS.API.DIRECT.GET.KV_demo-catalog.$KV.demo-catalog.>",
+		"$JS.API.STREAM.MSG.GET.KV_demo-catalog",
 	})
-	assertSubjects(t, "sub", perms.SubAllow, []string{"$KV.gestion-catalog.>"})
+	assertSubjects(t, "sub", perms.SubAllow, []string{"$KV.demo-catalog.>"})
 
-	// Lectura no implica escritura: el subject de datos no puede estar en pub.
-	if slices.Contains(perms.PubAllow, "$KV.gestion-catalog.>") {
-		t.Fatal("el acceso read no debe conceder pub sobre el subject de datos (sería escritura)")
+	// Reading does not imply writing: the data subject must not appear in pub.
+	if slices.Contains(perms.PubAllow, "$KV.demo-catalog.>") {
+		t.Fatal("read access must not grant pub on the data subject (that would be writing)")
 	}
 }
 
-// El caso que sostiene "permisos de KV variables por usuario": el direct-get lleva la
-// clave DENTRO del subject, así que acotar por {{user_id}} lo hace cumplir el servidor.
+// The case that underpins "per-user KV permissions": direct-get carries the key INSIDE the
+// subject, so scoping by {{user_id}} makes the server enforce it.
 func TestKVScopedByUserID(t *testing.T) {
 	tmpl := &Template{KV: []KVAccess{{
-		Bucket: "gestion-prefs",
+		Bucket: "demo-prefs",
 		Access: KVReadWrite,
 		Keys:   "{{user_id}}.>",
 	}}}
@@ -168,19 +168,19 @@ func TestKVScopedByUserID(t *testing.T) {
 
 	assertSubjects(t, "pub", perms.PubAllow, []string{
 		jsAccountInfoSubject,
-		"$JS.API.STREAM.INFO.KV_gestion-prefs",
-		"$JS.API.DIRECT.GET.KV_gestion-prefs.$KV.gestion-prefs.abc123.>",
-		"$KV.gestion-prefs.abc123.>",
+		"$JS.API.STREAM.INFO.KV_demo-prefs",
+		"$JS.API.DIRECT.GET.KV_demo-prefs.$KV.demo-prefs.abc123.>",
+		"$KV.demo-prefs.abc123.>",
 	})
-	assertSubjects(t, "sub", perms.SubAllow, []string{"$KV.gestion-prefs.abc123.>"})
+	assertSubjects(t, "sub", perms.SubAllow, []string{"$KV.demo-prefs.abc123.>"})
 }
 
-// Con acceso acotado por clave NO se concede STREAM.MSG.GET: ese subject no lleva la
-// clave, así que permitirlo dejaría leer todo el bucket por número de revisión y anularía
-// el scoping.
+// With key-scoped access STREAM.MSG.GET is NOT granted: that subject does not carry the
+// key, so allowing it would let the whole bucket be read by revision number and would
+// defeat the scoping.
 func TestKVScopedAccessDeniesRevisionGet(t *testing.T) {
 	tmpl := &Template{KV: []KVAccess{{
-		Bucket: "gestion-prefs",
+		Bucket: "demo-prefs",
 		Access: KVRead,
 		Keys:   "{{user_id}}.>",
 	}}}
@@ -189,14 +189,14 @@ func TestKVScopedAccessDeniesRevisionGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Expand: %v", err)
 	}
-	if slices.Contains(perms.PubAllow, "$JS.API.STREAM.MSG.GET.KV_gestion-prefs") {
-		t.Fatal("un acceso acotado por clave no debe conceder STREAM.MSG.GET (permitiría leer todo el bucket)")
+	if slices.Contains(perms.PubAllow, "$JS.API.STREAM.MSG.GET.KV_demo-prefs") {
+		t.Fatal("key-scoped access must not grant STREAM.MSG.GET (it would allow reading the whole bucket)")
 	}
 }
 
 func TestKVWatchAddsConsumerSubjects(t *testing.T) {
 	tmpl := &Template{KV: []KVAccess{{
-		Bucket: "gestion-sessions",
+		Bucket: "demo-sessions",
 		Access: KVRead,
 		Keys:   ">",
 		Watch:  true,
@@ -207,11 +207,11 @@ func TestKVWatchAddsConsumerSubjects(t *testing.T) {
 		t.Fatalf("Expand: %v", err)
 	}
 	for _, want := range []string{
-		"$JS.API.CONSUMER.CREATE.KV_gestion-sessions.>",
-		"$JS.API.CONSUMER.DELETE.KV_gestion-sessions.>",
+		"$JS.API.CONSUMER.CREATE.KV_demo-sessions.>",
+		"$JS.API.CONSUMER.DELETE.KV_demo-sessions.>",
 	} {
 		if !slices.Contains(perms.PubAllow, want) {
-			t.Fatalf("falta %q en pub allow: %v", want, perms.PubAllow)
+			t.Fatalf("missing %q in pub allow: %v", want, perms.PubAllow)
 		}
 	}
 }
@@ -224,13 +224,13 @@ func TestKVWatchDisabledByDefault(t *testing.T) {
 		t.Fatalf("Expand: %v", err)
 	}
 	if slices.Contains(perms.PubAllow, "$JS.API.CONSUMER.CREATE.KV_b.>") {
-		t.Fatal("watch no debe estar habilitado si la plantilla no lo pide")
+		t.Fatal("watch must not be enabled if the template does not ask for it")
 	}
 }
 
 func TestKVManageAddsStreamManagement(t *testing.T) {
 	tmpl := &Template{KV: []KVAccess{{
-		Bucket: "gestion-catalog",
+		Bucket: "demo-catalog",
 		Access: KVRead,
 		Manage: true,
 		Keys:   ">",
@@ -241,27 +241,28 @@ func TestKVManageAddsStreamManagement(t *testing.T) {
 		t.Fatalf("Expand: %v", err)
 	}
 	for _, want := range []string{
-		"$JS.API.STREAM.CREATE.KV_gestion-catalog",
-		"$JS.API.STREAM.UPDATE.KV_gestion-catalog",
-		"$JS.API.STREAM.DELETE.KV_gestion-catalog",
-		"$JS.API.STREAM.PURGE.KV_gestion-catalog",
+		"$JS.API.STREAM.CREATE.KV_demo-catalog",
+		"$JS.API.STREAM.UPDATE.KV_demo-catalog",
+		"$JS.API.STREAM.DELETE.KV_demo-catalog",
+		"$JS.API.STREAM.PURGE.KV_demo-catalog",
 	} {
 		if !slices.Contains(perms.PubAllow, want) {
-			t.Fatalf("falta %q en pub allow: %v", want, perms.PubAllow)
+			t.Fatalf("missing %q in pub allow: %v", want, perms.PubAllow)
 		}
 	}
-	// `manage` es el ciclo de vida del bucket, NO acceso a los datos: administrar sin
-	// `read-write` no debe conceder escritura. Es lo que permite que el BFF sea dueño del
-	// bucket de preferencias y a la vez no pueda escribir las de nadie.
-	if slices.Contains(perms.PubAllow, "$KV.gestion-catalog.>") {
-		t.Fatal("manage no debe conceder escritura de datos")
+	// `manage` is the bucket's lifecycle, NOT data access: administering without
+	// `read-write` must not grant writing. It is what lets the BFF own the preferences
+	// bucket while being unable to write anyone's preferences.
+	if slices.Contains(perms.PubAllow, "$KV.demo-catalog.>") {
+		t.Fatal("manage must not grant data writes")
 	}
 }
 
-// El caso manage-sin-datos: administrar un bucket ajeno sin poder leer lo que hay adentro.
+// The manage-without-data case: administering someone else's bucket without being able to
+// read what is inside.
 func TestKVManageWithoutDataAccess(t *testing.T) {
 	tmpl := &Template{KV: []KVAccess{{
-		Bucket: "gestion-sync-state",
+		Bucket: "demo-sync-state",
 		Access: KVNone,
 		Manage: true,
 	}}}
@@ -271,35 +272,35 @@ func TestKVManageWithoutDataAccess(t *testing.T) {
 		t.Fatalf("Expand: %v", err)
 	}
 
-	// Crear un bucket empieza por consultar si existe, así que STREAM.INFO es necesario.
+	// Creating a bucket starts by checking whether it exists, so STREAM.INFO is required.
 	for _, want := range []string{
-		"$JS.API.STREAM.CREATE.KV_gestion-sync-state",
-		"$JS.API.STREAM.INFO.KV_gestion-sync-state",
+		"$JS.API.STREAM.CREATE.KV_demo-sync-state",
+		"$JS.API.STREAM.INFO.KV_demo-sync-state",
 	} {
 		if !slices.Contains(perms.PubAllow, want) {
-			t.Fatalf("falta %q en pub allow: %v", want, perms.PubAllow)
+			t.Fatalf("missing %q in pub allow: %v", want, perms.PubAllow)
 		}
 	}
 
-	// Y nada de datos: ni leer ni escribir.
+	// And no data at all: neither read nor write.
 	if len(perms.SubAllow) != 0 {
-		t.Fatalf("access none no debe conceder sub sobre los datos: %v", perms.SubAllow)
+		t.Fatalf("access none must not grant sub on the data: %v", perms.SubAllow)
 	}
 	for _, unwanted := range []string{
-		"$KV.gestion-sync-state.>",
-		"$JS.API.DIRECT.GET.KV_gestion-sync-state.$KV.gestion-sync-state.>",
+		"$KV.demo-sync-state.>",
+		"$JS.API.DIRECT.GET.KV_demo-sync-state.$KV.demo-sync-state.>",
 	} {
 		if slices.Contains(perms.PubAllow, unwanted) {
-			t.Fatalf("access none no debe conceder %q: %v", unwanted, perms.PubAllow)
+			t.Fatalf("access none must not grant %q: %v", unwanted, perms.PubAllow)
 		}
 	}
 }
 
-// access: none sin manage no concede NADA sobre el bucket — es una entrada inerte, pero
-// válida (sirve para dejarlo documentado en la plantilla y habilitarlo después).
+// access: none without manage grants NOTHING on the bucket — it is an inert entry, but a
+// valid one (useful for documenting it in the template and enabling it later).
 //
-// Lo único que queda es $JS.API.INFO, que se concede por plantilla y no por bucket: es el
-// request de info de la cuenta, no expone ningún dato.
+// All that remains is $JS.API.INFO, which is granted per template and not per bucket: it is
+// the account info request, and it exposes no data.
 func TestKVNoneWithoutManageGrantsNothingOnTheBucket(t *testing.T) {
 	tmpl := &Template{KV: []KVAccess{{Bucket: "b", Access: KVNone}}}
 
@@ -309,12 +310,12 @@ func TestKVNoneWithoutManageGrantsNothingOnTheBucket(t *testing.T) {
 	}
 	assertSubjects(t, "pub", perms.PubAllow, []string{jsAccountInfoSubject})
 	if len(perms.SubAllow) != 0 {
-		t.Fatalf("esperaba ningún sub, obtuve %v", perms.SubAllow)
+		t.Fatalf("expected no sub, got %v", perms.SubAllow)
 	}
 }
 
-// $JS.API.INFO se concede solo si la plantilla declara algún acceso a KV: una plantilla sin
-// `kv:` no debe poder consultar la cuenta de JetStream.
+// $JS.API.INFO is granted only if the template declares some KV access: a template without
+// `kv:` must not be able to query the JetStream account.
 func TestJetStreamInfoOnlyWhenKVDeclared(t *testing.T) {
 	tmpl := &Template{Pub: SubjectSet{Allow: []string{"{{instance}}.{{user_id}}.api.>"}}}
 
@@ -323,7 +324,7 @@ func TestJetStreamInfoOnlyWhenKVDeclared(t *testing.T) {
 		t.Fatalf("Expand: %v", err)
 	}
 	if slices.Contains(perms.PubAllow, jsAccountInfoSubject) {
-		t.Fatalf("una plantilla sin kv: no debe conceder %s", jsAccountInfoSubject)
+		t.Fatalf("a template without kv: must not grant %s", jsAccountInfoSubject)
 	}
 }
 
@@ -336,7 +337,7 @@ func TestKVDefaultsToReadAllKeys(t *testing.T) {
 	}
 	assertSubjects(t, "sub", perms.SubAllow, []string{"$KV.b.>"})
 	if slices.Contains(perms.PubAllow, "$KV.b.>") {
-		t.Fatal("el acceso por defecto debe ser de solo lectura")
+		t.Fatal("the default access must be read-only")
 	}
 }
 
@@ -345,7 +346,7 @@ func TestKVInvalidAccessFails(t *testing.T) {
 
 	_, err := tmpl.Expand(personIdentity())
 	if !errors.Is(err, ErrInvalidKVAccess) {
-		t.Fatalf("esperaba ErrInvalidKVAccess, obtuve %v", err)
+		t.Fatalf("expected ErrInvalidKVAccess, got %v", err)
 	}
 }
 
@@ -354,15 +355,15 @@ func TestKVEmptyBucketFails(t *testing.T) {
 
 	_, err := tmpl.Expand(personIdentity())
 	if !errors.Is(err, ErrEmptyBucket) {
-		t.Fatalf("esperaba ErrEmptyBucket, obtuve %v", err)
+		t.Fatalf("expected ErrEmptyBucket, got %v", err)
 	}
 }
 
-// --- carga desde disco ----------------------------------------------------------------
+// --- loading from disk ----------------------------------------------------------------
 
 func TestLoadTemplateRejectsBadPlaceholderAtLoad(t *testing.T) {
-	// La validación tiene que pasar al CARGAR, no en la primera conexión: un error de
-	// tipeo en una plantilla debe impedir el arranque.
+	// Validation has to happen at LOAD time, not on the first connection: a typo in a
+	// template must prevent startup.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.yaml")
 	content := "pub:\n  allow:\n    - \"{{instance}}.{{nope}}.api.>\"\n"
@@ -371,26 +372,27 @@ func TestLoadTemplateRejectsBadPlaceholderAtLoad(t *testing.T) {
 	}
 
 	if _, err := LoadTemplate(path); !errors.Is(err, ErrUnknownPlaceholder) {
-		t.Fatalf("esperaba ErrUnknownPlaceholder al cargar, obtuve %v", err)
+		t.Fatalf("expected ErrUnknownPlaceholder at load time, got %v", err)
 	}
 }
 
 func TestLoadTemplateMissingFile(t *testing.T) {
-	if _, err := LoadTemplate(filepath.Join(t.TempDir(), "no-existe.yaml")); err == nil {
-		t.Fatal("esperaba error por archivo inexistente")
+	if _, err := LoadTemplate(filepath.Join(t.TempDir(), "does-not-exist.yaml")); err == nil {
+		t.Fatal("expected an error for a non-existent file")
 	}
 }
 
-// assertSubjects compara sin importar el orden: el orden en el JWT no cambia la semántica
-// del permiso, y fijarlo haría el test frágil ante un reordenamiento inocuo.
+// assertSubjects compares regardless of order: order in the JWT does not change the
+// permission's semantics, and pinning it would make the test brittle against a harmless
+// reordering.
 func assertSubjects(t *testing.T, label string, got, want []string) {
 	t.Helper()
 	if len(got) != len(want) {
-		t.Fatalf("%s: esperaba %d subjects %v, obtuve %d %v", label, len(want), want, len(got), got)
+		t.Fatalf("%s: expected %d subjects %v, got %d %v", label, len(want), want, len(got), got)
 	}
 	for _, w := range want {
 		if !slices.Contains(got, w) {
-			t.Fatalf("%s: falta %q en %v", label, w, got)
+			t.Fatalf("%s: missing %q in %v", label, w, got)
 		}
 	}
 }

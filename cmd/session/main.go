@@ -1,20 +1,20 @@
-// Command session imprime la identidad que el callout derivaría —user id y prefijo de
-// inbox— para un `sub` de Zitadel.
+// Command session prints the identity the callout would derive — user id and inbox prefix —
+// for a Zitadel `sub`.
 //
-// Existe por dos motivos:
+// It exists for two reasons:
 //
-//   - Diagnóstico: para leer un subject de un log o del monitoreo y saber de quién es.
-//   - Contrato con los clientes: cada cliente tiene que derivar el hash de su user id para
-//     poder fijar su prefijo de inbox. Este comando es la referencia contra la cual
-//     verificar una implementación en otro lenguaje.
+//   - Diagnosis: to read a subject from a log or from monitoring and tell whose it is.
+//   - Contract with clients: every client has to derive its own user id hash in order to set
+//     its inbox prefix. This command is the reference to verify an implementation in another
+//     language against.
 //
-// Uso:
+// Usage:
 //
-//	session <sub> [instancia]           # a partir del `sub` de Zitadel
-//	session --token <access-token>      # a partir de un token (le extrae el `sub`)
+//	session <sub> [instance]            # from the Zitadel `sub`
+//	session --token <access-token>      # from a token (extracts the `sub` from it)
 //
-// El modo --token NO verifica la firma: solo decodifica el payload para sacar el `sub`.
-// Verificar es tarea del callout.
+// The --token mode does NOT verify the signature: it only decodes the payload to pull out the
+// `sub`. Verifying is the callout's job.
 package main
 
 import (
@@ -24,11 +24,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/grava/gestion/auth-callout/internal/authz"
+	"github.com/gravadigital/nats-zitadel-auth-callout/internal/authz"
 )
 
-// defaultInstance es la instancia asumida si no se pasa una. Coincide con el default del
-// binario del callout.
+// defaultInstance is the instance assumed when none is passed. It matches the callout
+// binary's default.
 const defaultInstance = "dev"
 
 func main() {
@@ -40,7 +40,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("uso: session <sub> [instancia]  |  session --token <access-token> [instancia]")
+		return fmt.Errorf("usage: session <sub> [instance]  |  session --token <access-token> [instance]")
 	}
 
 	var subject string
@@ -48,7 +48,7 @@ func run(args []string) error {
 
 	if args[0] == "--token" {
 		if len(args) < 2 {
-			return fmt.Errorf("--token necesita el access token")
+			return fmt.Errorf("--token needs the access token")
 		}
 		var err error
 		subject, err = subjectFromToken(args[1])
@@ -81,29 +81,29 @@ func run(args []string) error {
 	return nil
 }
 
-// subjectFromToken saca el `sub` del payload de un JWT. No verifica la firma: es un helper
-// de diagnóstico, y el que valida es el callout.
+// subjectFromToken pulls the `sub` out of a JWT payload. It does not verify the signature: it
+// is a diagnostic helper, and the callout is what validates.
 func subjectFromToken(token string) (string, error) {
 	parts := strings.Split(strings.TrimSpace(token), ".")
 	if len(parts) != 3 {
-		return "", fmt.Errorf("no parece un JWT (tiene %d partes en vez de 3): "+
-			"si Zitadel emitió un token opaco, poné el tipo de token de acceso en JWT", len(parts))
+		return "", fmt.Errorf("does not look like a JWT (it has %d parts instead of 3): "+
+			"if Zitadel issued an opaque token, set the access token type to JWT", len(parts))
 	}
 
-	// El payload viene en base64url sin padding.
+	// The payload comes in base64url without padding.
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return "", fmt.Errorf("decodificar el payload del token: %w", err)
+		return "", fmt.Errorf("decode the token payload: %w", err)
 	}
 
 	var claims struct {
 		Subject string `json:"sub"`
 	}
 	if err := json.Unmarshal(payload, &claims); err != nil {
-		return "", fmt.Errorf("parsear el payload del token: %w", err)
+		return "", fmt.Errorf("parse the token payload: %w", err)
 	}
 	if claims.Subject == "" {
-		return "", fmt.Errorf("el token no trae `sub`")
+		return "", fmt.Errorf("the token carries no `sub`")
 	}
 	return claims.Subject, nil
 }

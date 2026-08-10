@@ -1,44 +1,44 @@
-# rules.yaml — PRUEBA DE CONCEPTO: rol de Zitadel -> (tipo de identidad, plantilla)
+# rules.yaml — PROOF OF CONCEPT: Zitadel role -> (identity type, template)
 #
-# Alcance deliberado: subjects de EJEMPLO, no el mapeo real de gestión. Lo que se valida
-# acá es el mecanismo —que el rol y el tipo de usuario cambien los permisos, en mensajes y
-# en KV— no el dominio. Los subjects definitivos se definen cuando exista el contrato del
-# BFF sobre el bus.
+# Deliberate scope: EXAMPLE subjects, not a real domain mapping. What is validated here is
+# the mechanism — that the role and the user type change the permissions, both for messages
+# and for KV — not the domain. The final subjects get defined once the BFF's contract over
+# the bus exists.
 #
-# Hay UN servicio de ejemplo (`demo`) con tres métodos: ping, echo y admin_reset.
+# There is ONE example service (`demo`) with three methods: ping, echo and admin_reset.
 #
-# CÓMO SE EVALÚA
-#   Se recorren las reglas EN ORDEN y gana la PRIMERA cuyo `match` coincida con algún rol
-#   del token. Sin coincidencia, la conexión se RECHAZA: no hay permisos por defecto, y la
-#   PoC lo prueba (un token sin rol conocido no conecta).
+# HOW IT IS EVALUATED
+#   Rules are walked IN ORDER and the FIRST whose `match` coincides with one of the token's
+#   roles wins. With no coincidence, the connection is REJECTED: there are no default
+#   permissions, and the PoC proves it (a token with no known role does not connect).
 #
-# EL ROL ES LO ÚNICO QUE DECIDE
-#   No hay heurística que adivine si un token es de una persona o de un servicio: lo
-#   declara `type`, y el rol lo asigna quien administra Zitadel.
+# THE ROLE IS THE ONLY THING THAT DECIDES
+#   There is no heuristic guessing whether a token belongs to a person or to a service:
+#   `type` declares it, and whoever administers Zitadel assigns the role.
 #
-#   Consecuencia práctica para la prueba: da igual si el token viene de un usuario humano o
-#   de un machine user. Un machine user con el rol `poc-user` entra por el camino de
-#   persona y recibe identidad de persona. Es lo que permite validar los tres caminos sin
-#   pasar por un login de browser.
+#   The practical consequence for testing: it makes no difference whether the token comes
+#   from a human user or from a machine user. A machine user with the `poc-user` role enters
+#   through the person path and receives a person identity. That is what makes it possible to
+#   validate all three paths without going through a browser login.
 
 version: 1
 
 rules:
-  # Persona con permisos amplios: todos los métodos de `demo`, y lectura de todo el KV.
+  # Person with broad permissions: every method of `demo`, and read access to all of the KV.
   - match: poc-admin
     type: person
     template: templates/poc-person-admin.yaml
 
-  # Persona con permisos acotados: solo dos métodos, y en KV solo su propia clave.
+  # Person with scoped permissions: only two methods, and in KV only their own key.
   - match: poc-user
     type: person
     template: templates/poc-person.yaml
 
-  # Service user: atiende el endpoint `demo` y es dueño del bucket de la prueba.
+  # Service user: serves the `demo` endpoint and owns the test bucket.
   - match: poc-service
     type: service
     service: demo
     template: templates/poc-service.yaml
 
-  # SIN catch-all: un token válido de Zitadel pero con un rol que no está acá NO conecta.
-  # Es parte de lo que la prueba verifica.
+  # NO catch-all: a valid Zitadel token carrying a role that is not listed here does NOT
+  # connect. That is part of what the test verifies.

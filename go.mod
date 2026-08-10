@@ -1,4 +1,4 @@
-module github.com/grava/gestion/auth-callout
+module github.com/gravadigital/nats-zitadel-auth-callout
 
 go 1.26
 

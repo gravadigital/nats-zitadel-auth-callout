@@ -1,85 +1,85 @@
-# auth-callout — autenticación NATS ↔ Zitadel con permisos variables por rol
+# nats-zitadel-auth-callout — NATS ↔ Zitadel authentication with per-role permissions
 
-Servicio de **auth callout** de NATS para la migración de gestión. Autentica contra Zitadel
-las dos clases de conexión al bus —**personas** y **service users**— y le mintea a cada una
-los permisos que le corresponden **por rol**, tanto para **mensajes** como para **KV**.
+A NATS **auth callout** service. It authenticates the two classes of connection to the bus
+—**people** and **service users**— against Zitadel and mints for each one the permissions it
+is entitled to **by role**, both for **messages** and for **KV**.
 
-No es un proxy ni un guardián en el camino de los datos: interviene **una sola vez, en el
-handshake** de cada conexión. Después, quien aplica los permisos es el propio servidor NATS,
-en cada publicación y en cada suscripción.
+It is not a proxy and not a gatekeeper in the data path: it steps in **exactly once, during
+the handshake** of each connection. After that, the one enforcing the permissions is the NATS
+server itself, on every publish and every subscribe.
 
-> **Estado: prueba de concepto.** Los subjects de `config/` son de **ejemplo** —un servicio
-> `demo` con tres métodos— elegidos para validar el mecanismo, no el dominio de gestión. El
-> mapeo real se define cuando exista el contrato del BFF sobre el bus.
+> **Status: proof of concept.** The subjects in `config/` are **examples** —a `demo` service
+> with three methods— chosen to validate the mechanism, not any particular domain. The real
+> mapping gets defined once the BFF's contract over the bus exists.
 >
-> Para correrla contra Zitadel real: **[docs/prueba-zitadel.md](docs/prueba-zitadel.md)**.
+> To run it against real Zitadel: **[docs/zitadel-test.md](docs/zitadel-test.md)**.
 
 ---
 
-## 1. Cómo funciona el intercambio
+## 1. How the exchange works
 
 ```
                     ┌──────────────┐
                     │   Zitadel    │
                     └──────▲───────┘
-                           │ 3. valida el token (JWKS, local)
+                           │ 3. validates the token (JWKS, local)
                            │
   ┌────────┐   1. CONNECT  │        ┌──────────────┐
-  │ cliente├───sentinel-client──────▶  NATS server │
+  │ client ├───sentinel-client──────▶  NATS server │
   └────────┘   + access token       └──┬────────▲──┘
                                        │        │
-                    2. $SYS.REQ.USER.AUTH│      │ 5. User JWT firmado
-                       (encriptado XKey) │      │    con los permisos
+                    2. $SYS.REQ.USER.AUTH│      │ 5. User JWT signed
+                       (XKey encrypted)  │      │    with the permissions
                                        ┌─▼──────┴──┐
-                                       │auth-callout│ 4. rol → plantilla → permisos
+                                       │auth-callout│ 4. role → template → permissions
                                        └────────────┘
 ```
 
-1. El cliente conecta con las creds del **`sentinel-client`** (que no concede nada por sí
-   solo) y pasa su **access token de Zitadel** en el campo `Token` del CONNECT.
-2. Como ese sentinel **no** está declarado en `--auth-user`, el servidor no lo autoriza por
-   su cuenta: publica un `authorization_request` en `$SYS.REQ.USER.AUTH`.
-3. El callout valida el token contra el JWKS de Zitadel. Verificación **local**, sin
-   introspección: no hay un round-trip por conexión.
-4. Rutea el **rol** del token a una plantilla y expande los permisos con la identidad de esa
-   conexión.
-5. Devuelve un **User JWT** recién firmado con esos permisos y con la expiración del token.
-   El servidor acepta la conexión con exactamente eso.
+1. The client connects with the **`sentinel-client`** creds (which grant nothing on their own)
+   and passes its **Zitadel access token** in the CONNECT `Token` field.
+2. Because that sentinel is **not** declared in `--auth-user`, the server does not authorize it
+   by itself: it publishes an `authorization_request` on `$SYS.REQ.USER.AUTH`.
+3. The callout validates the token against Zitadel's JWKS. **Local** verification, no
+   introspection: there is no round-trip per connection.
+4. It routes the token's **role** to a template and expands the permissions with that
+   connection's identity.
+5. It returns a freshly signed **User JWT** with those permissions and with the token's expiry.
+   The server accepts the connection with exactly that.
 
-Nada de esto vuelve a ocurrir mientras la conexión viva. El costo es un handshake más lento,
-no un salto por mensaje.
+None of this happens again while the connection lives. The cost is a slower handshake, not a
+hop per message.
 
 ---
 
-## 2. La gramática de subjects
+## 2. The subject grammar
 
 ```
-<instancia>.<user-id>.<svc>.<method>
+<instance>.<user-id>.<svc>.<method>
 ```
 
-| Segmento | Qué es | Ejemplo |
+| Segment | What it is | Example |
 |---|---|---|
-| `instancia` | Despliegue. Aísla dev/stage/prod en un mismo NATS. | `dev` |
-| `user-id` | **Quién llama.** El `sub` de Zitadel, crudo. Igual para personas y para service users: los dos son usuarios de Zitadel. | `312094857203948572` |
-| `svc` | **A quién le habla.** | `api`, `jira`, `email` |
-| `method` | Qué le pide. | `create_project` |
+| `instance` | Deployment. Isolates dev/stage/prod on a single NATS. | `dev` |
+| `user-id` | **Who is calling.** The Zitadel `sub`, raw. The same for people and for service users: both are Zitadel users. | `312094857203948572` |
+| `svc` | **Who it is talking to.** | `api`, `jira`, `email` |
+| `method` | What it is asking for. | `create_project` |
 
-La pieza que sostiene todo es que **`user-id` es parte del subject y lo fija el permiso, no
-la aplicación**. Un cliente solo puede publicar bajo su propio user id, así que el receptor
-puede leer del subject quién le habla y confiar en ese dato: viene avalado por el callout, no
-por el cuerpo del mensaje.
+The piece that holds everything together is that **`user-id` is part of the subject and it is
+the permission that fixes it, not the application**. A client can only publish under its own
+user id, so the receiver can read from the subject who is talking to it and trust that value:
+it is vouched for by the callout, not by the message body.
 
-El user id va **crudo** en el subject a propósito: es lo que hace que un subject se lea de
-corrido y que un servicio identifique al caller sin tabla de traducción. La contrapartida,
-explícita: el userId de Zitadel queda visible en subjects, logs y trazas.
+The user id goes into the subject **raw** on purpose: it is what makes a subject read fluently
+and lets a service identify the caller without a translation table. The trade-off, stated
+explicitly: the Zitadel userId is visible in subjects, logs and traces.
 
-Un servicio atiende con el caller en wildcard —`dev.*.api.>`— y responde por
-`allow_responses`, sin necesitar permiso de publicación hacia el inbox del cliente.
+A service serves with the caller as a wildcard —`dev.*.api.>`— and replies through
+`allow_responses`, without needing publish permission toward the client's inbox.
 
-### El prefijo de inbox no es opcional
+### The inbox prefix is not optional
 
-Cada identidad tiene su inbox privado, bajo el **hash** de su user id:
-`_INBOX.<hash(user-id)>.>`. **El cliente tiene que configurarlo al conectar**:
+Every identity has its private inbox, under the **hash** of its user id:
+`_INBOX.<hash(user-id)>.>`. **The client has to configure it when connecting**:
 
 ```go
 nats.Connect(url, nats.UserCredentials(sentinel), nats.Token(accessToken),
@@ -89,16 +89,16 @@ nats.Connect(url, nats.UserCredentials(sentinel), nats.Token(accessToken),
 connect({ servers, authenticator, token, inboxPrefix: `_INBOX.${userIDHash}` })  // nats.js
 ```
 
-Sin eso la librería genera un `_INBOX.<aleatorio>` que ningún permiso acotado autoriza, y las
-respuestas nunca llegan. La alternativa sería conceder `_INBOX.>`, pero entonces cualquier
-cliente de la cuenta podría suscribirse a las respuestas de los demás.
+Without that the library generates an `_INBOX.<random>` that no scoped permission authorizes,
+and the replies never arrive. The alternative would be granting `_INBOX.>`, but then any client
+in the account could subscribe to everyone else's replies.
 
-El hash es `sha256(user-id)` en base32 minúscula, 16 chars. No está para ocultar el user id
-—que ya va crudo en los subjects de mensajería— sino porque el prefijo de inbox necesita un
-token **de largo fijo y seguro para un subject**, y un `sub` arbitrario no lo garantiza.
+The hash is `sha256(user-id)` in lowercase base32, 16 chars. It is not there to hide the user
+id —which already travels raw in messaging subjects— but because the inbox prefix needs a token
+that is **fixed-length and subject-safe**, and an arbitrary `sub` does not guarantee that.
 
-Es **determinista**: el cliente lo recalcula de su propio token, sin canal lateral.
-`cmd/session` es la referencia:
+It is **deterministic**: the client recomputes it from its own token, with no side channel.
+`cmd/session` is the reference:
 
 ```console
 $ go run ./cmd/session 312094857203948572 dev
@@ -109,54 +109,55 @@ pub       dev.312094857203948572.<svc>.<method>
 
 ---
 
-## 3. Los permisos: dos archivos, sin recompilar
+## 3. The permissions: two files, no recompiling
 
 ```
-config/rules.yaml        rol del token  →  (tipo de identidad, plantilla)   [first-match-wins]
-config/templates/*.yaml  plantilla      →  permisos pub/sub + accesos a KV
+config/rules.yaml        token role  →  (identity type, template)   [first-match-wins]
+config/templates/*.yaml  template    →  pub/sub permissions + KV access
 ```
 
-Ambos se montan por path y se leen al arrancar. Cambiar quién puede qué **no** recompila.
+Both are mounted by path and read at startup. Changing who can do what does **not** recompile.
 
-**El rol es lo único que decide.** No hay heurística que adivine si un token es de una
-persona o de un servicio: lo declara `type` en la regla, y el rol lo asigna quien administra
-Zitadel. Así "¿qué puede hacer X?" se contesta leyendo dos archivos, sin ejecutar nada.
+**The role is the only thing that decides.** There is no heuristic guessing whether a token
+belongs to a person or to a service: `type` in the rule declares it, and whoever administers
+Zitadel assigns the role. That way "what can X do?" is answered by reading two files, without
+running anything.
 
 ```yaml
-# rules.yaml (el de la PoC)
+# rules.yaml (the PoC's)
 rules:
-  - match: poc-admin        # persona, permisos amplios
+  - match: poc-admin        # person, broad permissions
     type: person
     template: templates/poc-person-admin.yaml
 
-  - match: poc-user         # persona, permisos acotados
+  - match: poc-user         # person, scoped permissions
     type: person
     template: templates/poc-person.yaml
 
   - match: poc-service      # machine user
     type: service
-    service: demo           # su endpoint (su user id sale del token)
+    service: demo           # its endpoint (its user id comes from the token)
     template: templates/poc-service.yaml
 ```
 
-Sin coincidencia, **la conexión se rechaza**. No hay permisos por defecto — la PoC no declara
-catch-all a propósito, para poder verificarlo.
+With no match, **the connection is rejected**. There are no default permissions — the PoC
+declares no catch-all on purpose, so that this can be verified.
 
-El orden importa: si un token puede traer dos roles, el que quede **arriba** gana. Poné el más
-restrictivo primero.
+Order matters: if a token can carry two roles, the one placed **higher** wins. Put the most
+restrictive one first.
 
-`type` determina cómo se construye la **identidad**, no los permisos. El `user-id` es el
-mismo en los dos casos —el `sub` del token—; lo que cambia es si además hay un endpoint:
+`type` determines how the **identity** is built, not the permissions. The `user-id` is the same
+in both cases —the token's `sub`—; what changes is whether there is also an endpoint:
 
 | `type` | `user-id` | Endpoint (`{{service}}`) |
 |---|---|---|
-| `person` | su `sub` | — no atiende ningún endpoint |
-| `service` | su `sub` (el del machine user) | el nombre declarado en la regla, **compartido entre réplicas** a propósito: es lo que permite balancear con queue groups |
+| `person` | its `sub` | — serves no endpoint |
+| `service` | its `sub` (the machine user's) | the name declared in the rule, **shared between replicas** on purpose: it is what allows balancing with queue groups |
 
-Que el endpoint sea un eje aparte del user id es lo que permite tener varias réplicas de un
-servicio atendiendo el mismo `dev.*.api.>` aunque cada una conecte con su propio usuario.
+That the endpoint is an axis separate from the user id is what allows several replicas of a
+service to serve the same `dev.*.api.>` even though each connects with its own user.
 
-### Plantillas
+### Templates
 
 ```yaml
 pub:
@@ -166,9 +167,9 @@ sub:
   allow: ["_INBOX.{{user_id_hash}}.>"]
 kv:
   - bucket: poc-kv
-    access: read-write          # none | read | read-write   (datos)
-    manage: false               # ciclo de vida del bucket    (ortogonal)
-    keys: "{{user_id}}.>"       # QUÉ claves alcanza
+    access: read-write          # none | read | read-write   (data)
+    manage: false               # the bucket's lifecycle      (orthogonal)
+    keys: "{{user_id}}.>"       # WHICH keys it reaches
     watch: false
 response:
   max: 1                        # allow_responses
@@ -177,110 +178,110 @@ response:
 
 Placeholders:
 
-| Placeholder | Qué expande |
+| Placeholder | What it expands to |
 |---|---|
-| `{{instance}}` | la instancia de deploy |
-| `{{user_id}}` | el `sub` del token, crudo |
-| `{{user_id_hash}}` | el hash del user id — para el prefijo de inbox |
-| `{{service}}` | el nombre del endpoint; solo en plantillas `type: service` |
+| `{{instance}}` | the deployment instance |
+| `{{user_id}}` | the token's `sub`, raw |
+| `{{user_id_hash}}` | the hash of the user id — for the inbox prefix |
+| `{{service}}` | the endpoint name; only in `type: service` templates |
 
-Van con guion **bajo** (`{{user_id}}`), no con guion medio: el nombre del placeholder es un
-identificador, aunque el segmento del subject se lea `<user-id>`.
+They use an **underscore** (`{{user_id}}`), not a hyphen: the placeholder's name is an
+identifier, even though the subject segment reads `<user-id>`.
 
-**Allow-list, no deny-list.** Las plantillas de persona enumeran los métodos uno por uno.
-Es más largo de mantener, y es a propósito: con una deny-list, un método nuevo queda
-accesible hasta que alguien se acuerde de restringirlo. Con una allow-list, no lo alcanza
-nadie hasta que se lo habilita. Falla cerrado.
+**Allow-list, not deny-list.** Person templates enumerate the methods one by one. It is more
+work to maintain, and that is on purpose: with a deny-list, a new method stays accessible until
+somebody remembers to restrict it. With an allow-list, nobody reaches it until it is enabled.
+It fails closed.
 
 ---
 
-## 4. Permisos de KV variables por usuario
+## 4. Per-user KV permissions
 
-Para NATS un permiso de KV no es nada especial: es pub/sub sobre los subjects internos de
-JetStream. El bloque `kv:` existe para que ninguna plantilla tenga que conocerlos.
+To NATS a KV permission is nothing special: it is pub/sub over JetStream's internal subjects.
+The `kv:` block exists so that no template has to know them.
 
-| Operación | Subject | Permiso |
+| Operation | Subject | Permission |
 |---|---|---|
-| abrir bucket | `$JS.API.STREAM.INFO.KV_<b>` | pub |
+| open bucket | `$JS.API.STREAM.INFO.KV_<b>` | pub |
 | `Get(key)` | `$JS.API.DIRECT.GET.KV_<b>.$KV.<b>.<key>` | pub |
-| recibir el valor | `$KV.<b>.<key>` | sub |
+| receive the value | `$KV.<b>.<key>` | sub |
 | `Put`/`Delete(key)` | `$KV.<b>.<key>` | pub |
 | `Watch`/`Keys` | `$JS.API.CONSUMER.CREATE.KV_<b>.>` | pub |
-| crear/migrar bucket | `$JS.API.STREAM.{CREATE,UPDATE,DELETE,PURGE}.KV_<b>` | pub |
-| (siempre, si hay `kv:`) | `$JS.API.INFO` | pub |
+| create/migrate bucket | `$JS.API.STREAM.{CREATE,UPDATE,DELETE,PURGE}.KV_<b>` | pub |
+| (always, if there is `kv:`) | `$JS.API.INFO` | pub |
 
-**Que el direct-get lleve la clave dentro del subject es lo que hace posible el scoping por
-usuario**, y es el servidor el que lo aplica:
+**That direct-get carries the key inside the subject is what makes per-user scoping possible**,
+and it is the server that enforces it:
 
 ```yaml
 kv:
   - bucket: poc-kv
     access: read-write
-    keys: "{{user_id}}.>"     # escribe y lee SOLO lo suyo
+    keys: "{{user_id}}.>"     # writes and reads ONLY its own
 ```
 
-Tres detalles que el modelo resuelve y conviene conocer:
+Three details the model resolves and that are worth knowing:
 
-- **`access` y `manage` son ejes separados.** Un servicio puede ser *dueño* de un bucket —lo
-  crea y lo migra— y a la vez solo **leer** los datos: escribir la preferencia de un usuario
-  le corresponde a ese usuario. Un único nivel "admin" no permitiría expresarlo. `access: none`
-  con `manage: true` es el extremo: administra el bucket sin ver lo que hay adentro.
-- **Todo bucket necesita exactamente un `manage: true`.** Con cero, nadie puede crearlo y las
-  operaciones fallan con `stream not found`, que no dice nada de la causa. Con más de uno,
-  dos servicios pueden purgar el mismo bucket. Hay un test que lo verifica sobre el config
-  desplegado.
-- **`Get` por revisión y `Watch` no se pueden acotar por clave.** `STREAM.MSG.GET` no lleva
-  la clave en el subject, así que solo se concede cuando el acceso ya cubre el bucket
-  completo; y un watcher ve todo el bucket, por eso `watch` es un flag aparte.
+- **`access` and `manage` are separate axes.** A service can *own* a bucket —creating and
+  migrating it— and at the same time only **read** the data: writing a user's preference belongs
+  to that user. A single "admin" level could not express it. `access: none` with `manage: true`
+  is the extreme: it administers the bucket without seeing what is inside.
+- **Every bucket needs exactly one `manage: true`.** With zero, nobody can create it and
+  operations fail with `stream not found`, which says nothing about the cause. With more than
+  one, two services can purge the same bucket. There is a test that verifies this over the
+  shipped config.
+- **`Get` by revision and `Watch` cannot be scoped by key.** `STREAM.MSG.GET` does not carry the
+  key in the subject, so it is only granted when the access already covers the whole bucket; and
+  a watcher sees the entire bucket, which is why `watch` is a separate flag.
 
 ---
 
-## 5. Topología de cuentas
+## 5. Account topology
 
 ```
-operator gestion
+operator nats-callout
 ├── SYS
-├── GESTION        cuenta APP  — acá aterrizan TODAS las conexiones. JetStream + KV.
-└── GESTION_AUTH   cuenta AUTH — el callout y sus dos sentinelas.
+├── APP     APP account  — this is where ALL connections land. JetStream + KV.
+└── AUTH    AUTH account — the callout and its two sentinels.
 ```
 
-**Una sola cuenta APP para personas y servicios.** El aislamiento entre ellos lo dan los
-permisos de subject, que aplica el servidor. Separarlos en dos cuentas agregaría una frontera
-que habría que perforar con export/import para **cada** endpoint y **cada** bucket que
-compartan — y en gestión comparten casi todo, porque el BFF atiende a las personas. Una sola
-cuenta también deja los buckets en un namespace único, que es lo que permite que una persona
-y un servicio tengan permisos **distintos sobre el mismo bucket**.
+**A single APP account for people and services.** The isolation between them comes from the
+subject permissions, which the server enforces. Splitting them into two accounts would add a
+boundary that would have to be punched through with export/import for **every** endpoint and
+**every** bucket they share — and they share almost everything, because the BFF serves the
+people. A single account also keeps the buckets in one namespace, which is what allows a person
+and a service to hold **different permissions over the same bucket**.
 
-### Las dos sentinelas — el detalle que más se paga si se hace mal
+### The two sentinels — the detail that costs the most if you get it wrong
 
-En modo operator, si el user con el que conecta un cliente es el **mismo** que está declarado
-en `--auth-user`, NATS lo autoriza directo y **el callout nunca se dispara**: el cliente se
-queda con los permisos plenos de ese user. Por eso hacen falta dos:
+In operator mode, if the user a client connects with is the **same** one declared in
+`--auth-user`, NATS authorizes it directly and **the callout never fires**: the client keeps
+that user's full permissions. That is why two are needed:
 
-| Sentinela | En `--auth-user` | Quién lo usa |
+| Sentinel | In `--auth-user` | Who uses it |
 |---|---|---|
-| `sentinel-handler` | **sí** → bypasea el callout | el propio callout (no puede autorizarse a sí mismo) |
-| `sentinel-client` | **no** → dispara el callout | los clientes. Deny-all de lo suyo: el único acceso viene del User JWT. |
+| `sentinel-handler` | **yes** → bypasses the callout | the callout itself (it cannot authorize itself) |
+| `sentinel-client` | **no** → triggers the callout | the clients. Deny-all of its own: the only access comes from the User JWT. |
 
-`sentinel-client` es **seguro de distribuir**: por sí solo no autoriza nada.
+`sentinel-client` is **safe to distribute**: on its own it authorizes nothing.
 
-### Las dos signing keys
+### The two signing keys
 
-También son distintas, y confundirlas es el otro error clásico:
+They are different too, and confusing them is the other classic mistake:
 
-| Clave | Firma | Para qué |
+| Key | Signs | What for |
 |---|---|---|
-| signing key de `GESTION` (APP) | el **User JWT** | define en qué cuenta aterriza el usuario (`IssuerAccount`) |
-| signing key de `GESTION_AUTH` | el **authorization_response** | es el issuer del callout que el servidor tiene configurado |
+| `APP` account signing key | the **User JWT** | defines which account the user lands in (`IssuerAccount`) |
+| `AUTH` account signing key | the **authorization_response** | it is the callout issuer the server has configured |
 
-Los requests van **encriptados con XKey** (curve25519): sin eso, el access token del cliente
-viajaría en claro por `$SYS.REQ.USER.AUTH`.
+The requests travel **XKey-encrypted** (curve25519): without that, the client's access token
+would travel in the clear over `$SYS.REQ.USER.AUTH`.
 
 ---
 
-## 6. Levantarlo
+## 6. Bringing it up
 
-Requisitos: **Go 1.26+**, y `nsc` + `nats-server` en el PATH.
+Requirements: **Go 1.26+**, and `nsc` + `nats-server` on the PATH.
 
 ```sh
 go install github.com/nats-io/nsc/v2@latest
@@ -288,22 +289,23 @@ go install github.com/nats-io/nats-server/v2@latest
 ```
 
 ```sh
-make bootstrap    # genera operator, cuentas, sentinelas, XKey, authcallout y el resolver
-make run          # levanta NATS + el callout en foreground
-make test         # unitarios (incluye validar el config desplegable)
-make              # lista todos los targets
+make bootstrap    # generates operator, accounts, sentinels, XKey, authcallout and the resolver
+make run          # brings up NATS + the callout in the foreground
+make test         # unit tests (includes validating the shippable config)
+make              # lists every target
 ```
 
-El bootstrap es **idempotente**: si ya hay identidad en `nats/out/`, la reusa. Regenerarla
-rompe la confianza del servidor y obliga a reemitir todas las creds (`make clean-identity`).
+The bootstrap is **idempotent**: if there is already an identity in `nats/out/`, it is reused.
+Regenerating it breaks the server's trust and forces reissuing every cred
+(`make clean-identity`).
 
-### Probarlo a mano
+### Trying it by hand
 
-El modo por defecto es `mock`: un IdP en proceso que decodifica la identidad del texto del
-token, sin secretos ni red. El formato es `mock:<sub>:<username>:<roles>`.
+The default mode is `mock`: an in-process IdP that decodes the identity from the token text,
+with no secrets and no network. The format is `mock:<sub>:<username>:<roles>`.
 
-Ojo con los dos valores distintos: los subjects llevan el **user id crudo** (`$UID`) y el
-inbox lleva su **hash** (`$IHASH`).
+Watch out for the two distinct values: the subjects carry the **raw user id** (`$UID`) and the
+inbox carries its **hash** (`$IHASH`).
 
 ```sh
 NATS="nats --server nats://127.0.0.1:4322 --creds nats/out/sentinel-client.creds"
@@ -311,126 +313,143 @@ UID=zit-ana
 IHASH=$(go run ./cmd/session "$UID" dev | awk '/^inbox/{sub(/^_INBOX\./,"",$2); print $2}')
 U="$NATS --token mock:$UID:ana@grava.io:poc-user --inbox-prefix _INBOX.$IHASH"
 
-# Bajo su propio user id y un método habilitado: OK
-$U pub "dev.$UID.demo.ping" hola
+# Under its own user id and an enabled method: OK
+$U pub "dev.$UID.demo.ping" hello
 
-# Método solo de poc-admin: Permissions Violation
+# A poc-admin-only method: Permissions Violation
 $U pub "dev.$UID.demo.admin_reset" x
 
-# User id de otro: Permissions Violation
-$U pub "dev.otro.demo.ping" x
+# Someone else's user id: Permissions Violation
+$U pub "dev.other.demo.ping" x
 
-# KV acotado por usuario (el bucket lo crea antes el service user poc-service)
+# Per-user scoped KV (the bucket is created beforehand by the poc-service service user)
 $U kv put poc-kv "$UID.theme" dark    # OK
-$U kv put poc-kv "otro.theme" x       # falla
+$U kv put poc-kv "other.theme" x      # fails
 ```
 
-> **Para lo que debe fallar, usá `pub` y no `request`.** Una publicación denegada se reporta de
-> forma **asíncrona**: `nats request` la manda, no recibe respuesta y **sale con 0 sin imprimir
-> nada** — parece que funcionó. `nats pub` sí muestra `permissions violation` en el momento.
+> **For what is supposed to fail, use `pub` and not `request`.** A denied publish is reported
+> **asynchronously**: `nats request` sends it, receives no reply and **exits 0 printing
+> nothing** — it looks like it worked. `nats pub` does show `permissions violation` right away.
 >
-> Y **una violación sobre un subject de JetStream nunca se ve como violación**: el request se
-> queda sin respuesta y el cliente reporta un timeout. Cuando algo de KV "no responde", el
-> subject exacto que falta está en el log del `nats-server` como `Publish Violation`.
+> And **a violation on a JetStream subject never shows up as a violation**: the request goes
+> unanswered and the client reports a timeout. When something in KV "does not respond", the
+> exact missing subject is in the `nats-server` log as `Publish Violation`.
 
-### Contra Zitadel real
+### Against real Zitadel
 
-Runbook completo, con lo que hay que crear en Zitadel y la matriz de pruebas:
-**[docs/prueba-zitadel.md](docs/prueba-zitadel.md)**. En resumen:
+The full runbook, with what has to be created in Zitadel and the test matrix:
+**[docs/zitadel-test.md](docs/zitadel-test.md)**. In short:
 
 ```sh
-GESTION_IDP_MODE=zitadel
-GESTION_ZITADEL_ISSUER_URL=https://id.grava.io
-GESTION_ZITADEL_PROJECT_ID=<projectId>          # recomendado
+CALLOUT_IDP_MODE=zitadel
+CALLOUT_ZITADEL_ISSUER_URL=https://id.grava.io
+CALLOUT_ZITADEL_PROJECT_ID=<projectId>          # recommended
 ```
 
 ```sh
-make test-live    # verifica discovery + JWKS antes de levantar nada
+make test-live    # verifies discovery + JWKS before bringing anything up
 ```
 
-El callout loguea el modo en la primera línea: **verificá que diga `idp=zitadel`**, no
+The callout logs the mode on its first line: **check that it says `idp=zitadel`**, not
 `idp=mock`.
 
-Tres cosas que hacen fallar la autenticación y no son obvias:
+Three things that break authentication and are not obvious:
 
-- **El token tiene que ser JWT.** En Zitadel, un machine user con *Access Token Type: Bearer*
-  emite un token **opaco**; el callout valida por firma y lo rechaza. Se cambia a **JWT** en el
-  service user. `scripts/token-info.sh` lo detecta y lo dice.
-- **El token tiene que traer los roles.** Los flujos machine-to-machine solo incluyen la claim
-  de roles si se pide el scope `urn:zitadel:iam:org:projects:roles` — el genérico, no el de un
-  proyecto puntual. `scripts/zitadel-token.sh` ya lo manda.
-- **El JWKS de una instancia self-hosted no está donde el de Cloud.** `id.grava.io` lo sirve en
-  `/oauth/v2/keys`, no en `/.well-known/jwks.json`. El callout lo resuelve por OIDC discovery,
-  así que funciona con las dos.
+- **The token has to be a JWT.** In Zitadel, a machine user with *Access Token Type: Bearer*
+  issues an **opaque** token; the callout validates by signature and rejects it. You change it
+  to **JWT** on the service user. `scripts/token-info.sh` detects it and says so.
+- **The token has to carry the roles.** Machine-to-machine flows only include the roles claim if
+  the `urn:zitadel:iam:org:projects:roles` scope is requested — the generic one, not the one for
+  a specific project. `scripts/zitadel-token.sh` already sends it.
+- **A self-hosted instance's JWKS is not where Cloud's is.** `id.grava.io` serves it at
+  `/oauth/v2/keys`, not at `/.well-known/jwks.json`. The callout resolves it through OIDC
+  discovery, so it works with both.
 
-`GESTION_ZITADEL_PROJECT_ID` acota la lectura de roles a un proyecto; sin él se leen los de
-todos los proyectos del token, y un rol homónimo de otro proyecto podría matchear una regla.
+`CALLOUT_ZITADEL_PROJECT_ID` narrows role reading to one project; without it the roles of every
+project in the token are read, and a same-named role from another project could match a rule.
 
-> Si relanzás el stack, **matá primero el anterior**. `make run` solo detiene el
-> `nats-server` que arrancó él. Si queda un callout viejo vivo, el `nats-server` nuevo no
-> puede bindear el puerto y muere, mientras el callout viejo sigue atendiendo el subject en
-> su modo anterior. El síntoma es desconcertante: cambiás la config y no pasa nada.
+> If you relaunch the stack, **kill the previous one first**. `make run` only stops the
+> `nats-server` it started itself. If an old callout stays alive, the new `nats-server` cannot
+> bind the port and dies, while the old callout keeps serving the subject in its previous mode.
+> The symptom is baffling: you change the config and nothing happens.
 
 ---
 
-## 7. Qué hay en cada lugar
+## 7. What lives where
 
 ```
-cmd/callout               el binario
-cmd/session               deriva user id e inbox de un `sub` o de un token
-internal/authz            el motor de permisos: routing por rol, plantillas, KV, identidad
-internal/idp              verificación del token (Zitadel por JWKS; mock para dev/CI)
-internal/callout          el protocolo de auth callout (XKey, JWTs, firma)
-internal/config           entorno → Config
-config/                   rules.yaml + las plantillas (se montan por path)
+cmd/callout               the binary
+cmd/session               derives user id and inbox from a `sub` or from a token
+internal/authz            the permission engine: role routing, templates, KV, identity
+internal/idp              token verification (Zitadel through JWKS; mock for dev/CI)
+internal/callout          the auth callout protocol (XKey, JWTs, signing)
+internal/config           environment → Config
+config/                   rules.yaml + the templates (mounted by path)
 nats/                     bootstrap.sh, nats-server.conf, .env.example
 scripts/run.sh            make run
-scripts/zitadel-token.sh  access token de un service user (key JSON o client secret)
-scripts/token-info.sh     qué trae un token y por qué el callout lo rechazaría
-docs/prueba-zitadel.md    runbook de la prueba contra Zitadel real
+scripts/zitadel-token.sh  access token for a service user (key JSON or client secret)
+scripts/token-info.sh     what a token carries and why the callout would reject it
+docs/zitadel-test.md      runbook for the test against real Zitadel
 ```
 
-La configuración se parte en dos fuentes a propósito: **`nats/.env`** lleva lo que decide una
-persona, y **`nats/out/callout-env.sh`** —que genera el bootstrap— expone las seeds, creds y
-pubkeys. Así las claves nunca se escriben a mano y regenerar la identidad no obliga a editar
-configuración.
+The configuration is split into two sources on purpose: **`nats/.env`** carries what a person
+decides, and **`nats/out/callout-env.sh`** —generated by the bootstrap— exposes the seeds, creds
+and pubkeys. That way the keys are never written by hand and regenerating the identity does not
+force editing any configuration.
 
 ---
 
-## 8. Agregar un rol o un servicio
+## 8. Adding a role or a service
 
-1. Crear la plantilla en `config/templates/`.
-2. Agregar la regla en `config/rules.yaml`. **El orden importa** (first-match-wins): lo más
-   restrictivo arriba, y el `"*"` al final si querés un catch-all (la PoC no tiene).
-3. `make test` — valida que la plantilla cargue, que expanda sin placeholders sueltos, que el
-   routing elija la que corresponde, y que todo bucket siga teniendo exactamente un
-   administrador.
-4. Asignar el rol en Zitadel. Para un service user: machine user + su key JSON + el rol sobre
-   el proyecto.
+1. Create the template in `config/templates/`.
+2. Add the rule in `config/rules.yaml`. **Order matters** (first-match-wins): the most
+   restrictive on top, and `"*"` at the end if you want a catch-all (the PoC has none).
+3. `make test` — validates that the template loads, that it expands with no dangling
+   placeholders, that the routing picks the right one, and that every bucket still has exactly
+   one administrator.
+4. Assign the role in Zitadel. For a service user: machine user + its key JSON + the role over
+   the project.
 
-No hace falta recompilar ni reiniciar nada más que el callout.
+Nothing needs recompiling or restarting other than the callout.
 
 ---
 
-## 9. Estado
+## 9. Status
 
-**Prueba de concepto funcionando.** Verificado end-to-end contra un `nats-server` real (modo
-mock, con la config de `config/`) — los 16 casos del runbook:
+**Proof of concept working.** Verified end-to-end against a real `nats-server` (mock mode, with
+the config in `config/`) — the runbook's 16 cases:
 
-- **mensajes:** `poc-user` alcanza solo sus métodos; `poc-admin` alcanza todos; ninguno puede
-  publicar bajo el user id de otro, ni cruzar de instancia, ni suscribirse como si fuera el
-  servicio;
-- **KV, mismo bucket y alcances distintos por rol:** `poc-user` solo su propia clave;
-  `poc-admin` lee todas y escribe solo la suya; el service user lo crea y lo opera;
-- **rechazos:** sin token, con token mal formado, o con un rol que no está en `rules.yaml`
-  (no hay catch-all) → `Authorization Violation`.
+- **messages:** `poc-user` reaches only its own methods; `poc-admin` reaches all of them; neither
+  can publish under someone else's user id, cross instances, or subscribe as if it were the
+  service;
+- **KV, same bucket and different scopes per role:** `poc-user` only its own key; `poc-admin`
+  reads all of them and writes only its own; the service user creates and operates it;
+- **rejections:** with no token, with a malformed token, or with a role that is not in
+  `rules.yaml` (there is no catch-all) → `Authorization Violation`.
 
-También verificado contra **Zitadel real** (`id.grava.io`): el discovery resuelve el JWKS en
-`/oauth/v2/keys` y un token inválido se rechaza como tal (`make test-live`).
+Also verified against **real Zitadel** (`id.grava.io`): discovery resolves the JWKS at
+`/oauth/v2/keys` and an invalid token is rejected as such (`make test-live`).
 
-**Lo que falta:** correr el runbook completo contra `id.grava.io` con los service users dados
-de alta (ver [docs/prueba-zitadel.md](docs/prueba-zitadel.md)); definir los subjects reales de
-gestión cuando exista el contrato del BFF; automatizar el runbook en `test/e2e/`; el Dockerfile
-y el compose; y cache de tokens verificados si el volumen de conexiones lo justifica (hoy la
-firma se valida localmente, que es barato, pero el enriquecimiento de username por `userinfo`
-sí es una llamada HTTP por conexión de service user).
+**What is missing:** running the full runbook against `id.grava.io` with the service users
+provisioned (see [docs/zitadel-test.md](docs/zitadel-test.md)); defining the real subjects once
+the BFF's contract exists; automating the runbook under `test/e2e/`; the Dockerfile and the
+compose; and caching verified tokens if the connection volume justifies it (today the signature
+is validated locally, which is cheap, but the username enrichment through `userinfo` is one HTTP
+call per service user connection).
+
+---
+
+## 10. License
+
+**Apache-2.0** — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+It may be used, modified and redistributed, including commercially and inside proprietary
+software. The two obligations are keeping the copyright notice and **stating the changes** made
+in modified files. Apache-2.0 was chosen over MIT for the **express patent grant**, which is
+what is expected of a piece of infrastructure, and because it is the license of the ecosystem it
+integrates with — NATS and its libraries.
+
+The software is distributed **"AS IS", without warranties of any kind and without assuming
+liability** for its use: it is a proof of concept. It is worth insisting on what section 5 says
+—the signing keys, the two sentinels— because a misconfiguration of this service is an
+authorization problem across the whole bus.

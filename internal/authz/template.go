@@ -1,12 +1,13 @@
-// Package authz traduce la identidad autenticada (rol + tipo de usuario) en el set de
-// permisos NATS que el callout mintea en el User JWT.
+// Package authz translates an authenticated identity (role + user type) into the set of
+// NATS permissions the callout mints into the User JWT.
 //
-// El modelo tiene dos piezas:
+// The model has two pieces:
 //
-//	rules.yaml   rol del token -> (tipo de usuario, plantilla)   [routing, first-match-wins]
-//	templates/   plantilla -> permisos pub/sub + accesos a KV     [el permiso concreto]
+//	rules.yaml   token role -> (user type, template)          [routing, first-match-wins]
+//	templates/   template -> pub/sub permissions + KV access  [the concrete permission]
 //
-// Ambas se montan por path y se leen al arrancar: cambiar quién puede qué NO recompila.
+// Both are mounted by path and read at startup: changing who can do what does NOT require
+// recompiling.
 package authz
 
 import (
@@ -20,124 +21,124 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Errores de plantilla.
+// Template errors.
 var (
-	// ErrUnknownPlaceholder marca una plantilla que usa un {{...}} que no existe.
-	ErrUnknownPlaceholder = errors.New("authz: placeholder desconocido en la plantilla")
-	// ErrInvalidSubject marca un subject que, ya expandido, no es un subject NATS válido.
-	ErrInvalidSubject = errors.New("authz: subject inválido")
-	// ErrInvalidKVAccess marca un nivel de acceso a KV que no existe.
-	ErrInvalidKVAccess = errors.New("authz: nivel de acceso KV inválido")
-	// ErrEmptyBucket marca una entrada de KV sin bucket.
-	ErrEmptyBucket = errors.New("authz: falta el bucket en la entrada kv")
+	// ErrUnknownPlaceholder flags a template using a {{...}} that does not exist.
+	ErrUnknownPlaceholder = errors.New("authz: unknown placeholder in template")
+	// ErrInvalidSubject flags a subject that, once expanded, is not a valid NATS subject.
+	ErrInvalidSubject = errors.New("authz: invalid subject")
+	// ErrInvalidKVAccess flags a KV access level that does not exist.
+	ErrInvalidKVAccess = errors.New("authz: invalid KV access level")
+	// ErrEmptyBucket flags a KV entry with no bucket.
+	ErrEmptyBucket = errors.New("authz: missing bucket in kv entry")
 )
 
-// placeholderRE captura {{nombre}} con espacios opcionales: {{ session }} también vale.
+// placeholderRE captures {{name}} with optional spaces: {{ session }} works too.
 var placeholderRE = regexp.MustCompile(`\{\{\s*([a-z][a-z0-9_]*)\s*\}\}`)
 
-// Niveles de acceso a los DATOS de un bucket KV.
+// Access levels for the DATA in a KV bucket.
 //
-// El ciclo de vida del bucket (crear, reconfigurar, purgar) es un eje SEPARADO: KVAccess.Manage.
-// Son cosas distintas y conviene poder combinarlas: el BFF es dueño del bucket de
-// preferencias —lo crea y lo migra— pero solo LEE las preferencias, porque escribir la
-// preferencia de alguien le corresponde a ese alguien. Un único nivel "admin" que
-// incluyera escritura no permitiría expresar eso.
+// A bucket's lifecycle (create, reconfigure, purge) is a SEPARATE axis: KVAccess.Manage.
+// They are different things and it pays to be able to combine them: the BFF owns the
+// preferences bucket — it creates and migrates it — but only READS the preferences, because
+// writing someone's preference belongs to that someone. A single "admin" level that
+// included writing could not express that.
 const (
-	// KVNone no da acceso a los datos. Sirve combinado con Manage: el servicio que
-	// administra el ciclo de vida de un bucket no necesariamente tiene que poder leer lo
-	// que hay adentro (p.ej. el que corre las migraciones de un bucket ajeno).
+	// KVNone grants no access to the data. It is useful combined with Manage: the service
+	// administering a bucket's lifecycle does not necessarily have to be able to read what
+	// is inside (e.g. the one running migrations on someone else's bucket).
 	KVNone = "none"
-	// KVRead permite abrir el bucket y leer claves (Get).
+	// KVRead allows opening the bucket and reading keys (Get).
 	KVRead = "read"
-	// KVReadWrite agrega escritura y borrado de claves (Put/Delete).
+	// KVReadWrite adds writing and deleting keys (Put/Delete).
 	KVReadWrite = "read-write"
 )
 
-// Template es una plantilla de permisos: el YAML tal como se escribe en
-// config/templates/. Los subjects pueden llevar placeholders {{...}} que se expanden
-// por sesión con la identidad ya autenticada (ver Identity.placeholders).
+// Template is a permission template: the YAML as written in config/templates/. Subjects may
+// carry {{...}} placeholders that are expanded per session with the already-authenticated
+// identity (see Identity.placeholders).
 type Template struct {
-	// Pub son los permisos de publicación.
+	// Pub holds the publish permissions.
 	Pub SubjectSet `yaml:"pub"`
-	// Sub son los permisos de suscripción.
+	// Sub holds the subscribe permissions.
 	Sub SubjectSet `yaml:"sub"`
-	// KV declara accesos a buckets KV en alto nivel. El loader los traduce a los
-	// subjects $KV.*/$JS.API.* concretos y los agrega a Pub/Sub — así una plantilla
-	// no tiene que conocer el protocolo de JetStream.
+	// KV declares high-level access to KV buckets. The loader translates them into the
+	// concrete $KV.*/$JS.API.* subjects and appends them to Pub/Sub — that way a template
+	// does not have to know the JetStream protocol.
 	KV []KVAccess `yaml:"kv"`
-	// Response controla allow_responses: habilita responder al inbox del caller sin
-	// un permiso de pub explícito hacia ese inbox. Es lo que necesita un servicio
-	// para contestar requests.
+	// Response controls allow_responses: it enables replying to the caller's inbox without
+	// an explicit pub permission toward that inbox. It is what a service needs in order to
+	// answer requests.
 	Response *ResponseRule `yaml:"response"`
 }
 
-// SubjectSet es un par allow/deny de subjects. NATS evalúa deny sobre allow, así que
-// deny sirve para recortar un allow amplio (p.ej. permitir `svc.>` menos un método).
+// SubjectSet is an allow/deny pair of subjects. NATS evaluates deny over allow, so deny is
+// useful for trimming a broad allow (e.g. allowing `svc.>` minus one method).
 type SubjectSet struct {
 	Allow []string `yaml:"allow"`
 	Deny  []string `yaml:"deny"`
 }
 
-// KVAccess es un acceso declarado a un bucket KV.
+// KVAccess is a declared access to a KV bucket.
 type KVAccess struct {
-	// Bucket es el nombre del bucket (sin el prefijo KV_ del stream).
+	// Bucket is the bucket name (without the stream's KV_ prefix).
 	Bucket string `yaml:"bucket"`
-	// Access es el acceso a los DATOS: read | read-write. Default read.
+	// Access is access to the DATA: read | read-write. Defaults to read.
 	Access string `yaml:"access"`
-	// Manage habilita el CICLO DE VIDA del bucket: crearlo, reconfigurarlo, borrarlo y
-	// purgarlo. Es ortogonal a Access, y cada bucket necesita exactamente un servicio que
-	// lo tenga — si no, nadie puede crearlo y las operaciones de datos fallan con
-	// "stream not found" sin decir por qué.
+	// Manage enables the bucket's LIFECYCLE: creating, reconfiguring, deleting and purging
+	// it. It is orthogonal to Access, and every bucket needs exactly one service that has
+	// it — otherwise nobody can create the bucket and data operations fail with
+	// "stream not found" without saying why.
 	Manage bool `yaml:"manage"`
-	// Keys acota QUÉ claves alcanza el permiso, como patrón de subject NATS relativo
-	// al bucket. Admite placeholders: `{{user_id}}.>` deja al caller operar solo bajo
-	// su propio user id. Default `>` (todas).
+	// Keys narrows WHICH keys the permission reaches, as a NATS subject pattern relative to
+	// the bucket. It accepts placeholders: `{{user_id}}.>` lets the caller operate only
+	// under its own user id. Defaults to `>` (all of them).
 	Keys string `yaml:"keys"`
-	// Watch habilita Watch()/Keys(), que crean un consumer efímero sobre el bucket.
-	// Va aparte porque no se puede acotar por clave: un watcher ve todo el bucket.
+	// Watch enables Watch()/Keys(), which create an ephemeral consumer over the bucket. It
+	// is separate because it cannot be narrowed by key: a watcher sees the whole bucket.
 	Watch bool `yaml:"watch"`
 }
 
-// ResponseRule es allow_responses: cuántas respuestas y por cuánto tiempo.
+// ResponseRule is allow_responses: how many replies and for how long.
 type ResponseRule struct {
 	Max int    `yaml:"max"`
 	TTL string `yaml:"ttl"`
 }
 
-// Permissions es el resultado ya expandido: lo que va al User JWT.
+// Permissions is the already-expanded result: what goes into the User JWT.
 type Permissions struct {
 	PubAllow []string
 	PubDeny  []string
 	SubAllow []string
 	SubDeny  []string
-	// RespMax y RespTTL son allow_responses; RespMax 0 significa sin allow_responses.
+	// RespMax and RespTTL are allow_responses; RespMax 0 means no allow_responses.
 	RespMax int
 	RespTTL time.Duration
 }
 
-// LoadTemplate lee y parsea una plantilla, y valida que expanda limpio. La validación
-// se hace acá, al arrancar, con una identidad de prueba: un placeholder mal escrito o
-// un subject inválido rompe el arranque en vez de emitir un JWT roto en producción.
+// LoadTemplate reads and parses a template, and validates that it expands cleanly. The
+// validation happens here, at startup, against a probe identity: a mistyped placeholder or
+// an invalid subject breaks startup instead of emitting a broken JWT in production.
 func LoadTemplate(path string) (*Template, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("authz: leer plantilla %q: %w", path, err)
+		return nil, fmt.Errorf("authz: read template %q: %w", path, err)
 	}
 	var t Template
 	if err := yaml.Unmarshal(data, &t); err != nil {
-		return nil, fmt.Errorf("authz: parsear plantilla %q: %w", path, err)
+		return nil, fmt.Errorf("authz: parse template %q: %w", path, err)
 	}
-	// Dry-run de expansión: detecta placeholders desconocidos, buckets vacíos,
-	// niveles de acceso inválidos y subjects malformados antes de servir tráfico.
+	// Expansion dry run: catches unknown placeholders, empty buckets, invalid access levels
+	// and malformed subjects before serving any traffic.
 	probe := Identity{Instance: "probe", UserID: "probe", Service: "probe"}
 	if _, err := t.Expand(probe); err != nil {
-		return nil, fmt.Errorf("authz: validar plantilla %q: %w", path, err)
+		return nil, fmt.Errorf("authz: validate template %q: %w", path, err)
 	}
 	return &t, nil
 }
 
-// Expand resuelve la plantilla contra una identidad concreta y devuelve los permisos
-// finales, con los accesos a KV ya traducidos a subjects.
+// Expand resolves the template against a concrete identity and returns the final
+// permissions, with KV access already translated into subjects.
 func (t *Template) Expand(id Identity) (*Permissions, error) {
 	vars := id.placeholders()
 
@@ -158,13 +159,13 @@ func (t *Template) Expand(id Identity) (*Permissions, error) {
 		return nil, err
 	}
 
-	// Los accesos a KV se agregan a los mismos allow-lists: para NATS un permiso de KV
-	// no es nada especial, es pub/sub sobre los subjects internos de JetStream.
+	// KV access is appended to the same allow-lists: to NATS a KV permission is nothing
+	// special, it is pub/sub over JetStream's internal subjects.
 	if len(t.KV) > 0 {
-		// Todo cliente de JetStream arranca preguntando por la cuenta. No es por bucket, así
-		// que se concede una vez y no por entrada. Sin esto, la inicialización del contexto
-		// de JetStream se queda esperando y el error que ve el cliente es un timeout, que no
-		// dice nada sobre la causa real.
+		// Every JetStream client starts by asking about the account. It is not per bucket, so
+		// it is granted once rather than per entry. Without it, initializing the JetStream
+		// context hangs and the error the client sees is a timeout, which says nothing about
+		// the real cause.
 		pubAllow = append(pubAllow, jsAccountInfoSubject)
 
 		for _, kv := range t.KV {
@@ -199,27 +200,27 @@ func (t *Template) Expand(id Identity) (*Permissions, error) {
 	return perms, nil
 }
 
-// defaultResponseTTL es la vigencia de allow_responses cuando la plantilla fija `max`
-// pero no `ttl`. 30s es el default de NATS.
+// defaultResponseTTL is how long allow_responses lasts when the template sets `max` but not
+// `ttl`. 30s is the NATS default.
 const defaultResponseTTL = 30 * time.Second
 
-// jsAccountInfoSubject es el request de info de JetStream de la cuenta. Lo hace todo
-// cliente al inicializar su contexto de JetStream. Expone los límites y el uso de la
-// cuenta, no datos de ningún bucket.
+// jsAccountInfoSubject is the account's JetStream info request. Every client issues it when
+// initializing its JetStream context. It exposes the account's limits and usage, not the
+// data in any bucket.
 const jsAccountInfoSubject = "$JS.API.INFO"
 
-// subjects traduce un KVAccess a los subjects pub/sub que ese nivel de acceso requiere.
+// subjects translates a KVAccess into the pub/sub subjects that access level requires.
 //
-// El mapeo sale del protocolo de JetStream KV (verificado contra nats.go/jetstream):
+// The mapping comes from the JetStream KV protocol (verified against nats.go/jetstream):
 //
-//	abrir bucket   pub  $JS.API.STREAM.INFO.KV_<b>
+//	open bucket    pub  $JS.API.STREAM.INFO.KV_<b>
 //	Get(key)       pub  $JS.API.DIRECT.GET.KV_<b>.$KV.<b>.<key>   (get-last-by-subject)
-//	               sub  $KV.<b>.<key>                             (llega el valor)
+//	               sub  $KV.<b>.<key>                             (the value arrives)
 //	Put/Delete     pub  $KV.<b>.<key>
 //	Watch/Keys     pub  $JS.API.CONSUMER.CREATE.KV_<b>.>
 //
-// Que el direct-get lleve la clave DENTRO del subject es lo que hace posible acotar la
-// lectura por clave — y por lo tanto por usuario, vía el placeholder {{user_id}}.
+// The fact that direct-get carries the key INSIDE the subject is what makes it possible to
+// scope reads by key — and therefore by user, via the {{user_id}} placeholder.
 func (k KVAccess) subjects(vars map[string]string) (pub, sub []string, err error) {
 	if k.Bucket == "" {
 		return nil, nil, ErrEmptyBucket
@@ -238,8 +239,8 @@ func (k KVAccess) subjects(vars map[string]string) (pub, sub []string, err error
 		return nil, nil, err
 	}
 
-	stream := "KV_" + bucket             // nombre del stream que respalda el bucket
-	data := "$KV." + bucket + "." + keys // subjects de datos del bucket, ya acotados
+	stream := "KV_" + bucket             // name of the stream backing the bucket
+	data := "$KV." + bucket + "." + keys // the bucket's data subjects, already scoped
 
 	access := k.Access
 	if access == "" {
@@ -249,27 +250,27 @@ func (k KVAccess) subjects(vars map[string]string) (pub, sub []string, err error
 	switch access {
 	case KVNone, KVRead, KVReadWrite:
 	default:
-		return nil, nil, fmt.Errorf("%w: %q (esperaba %s|%s|%s)",
+		return nil, nil, fmt.Errorf("%w: %q (expected %s|%s|%s)",
 			ErrInvalidKVAccess, access, KVNone, KVRead, KVReadWrite)
 	}
 
 	if access != KVNone {
-		// Lectura: abrir el bucket + direct-get de las claves permitidas + recibir el valor.
+		// Reading: open the bucket + direct-get the allowed keys + receive the value.
 		pub = append(pub,
 			"$JS.API.STREAM.INFO."+stream,
 			"$JS.API.DIRECT.GET."+stream+"."+data,
 		)
 		sub = append(sub, data)
 
-		// Get por revisión (GetRevision) usa STREAM.MSG.GET, que NO lleva la clave en el
-		// subject y por lo tanto no se puede acotar. Solo se concede cuando el acceso ya
-		// cubre todo el bucket; si no, dárselo anularía el scoping por clave.
+		// Get by revision (GetRevision) uses STREAM.MSG.GET, which does NOT carry the key in
+		// the subject and therefore cannot be scoped. It is only granted when the access
+		// already covers the whole bucket; otherwise granting it would defeat key scoping.
 		if keys == ">" {
 			pub = append(pub, "$JS.API.STREAM.MSG.GET."+stream)
 		}
 
 		if k.Watch {
-			// Un consumer efímero ve el bucket completo: no hay forma de acotarlo por clave.
+			// An ephemeral consumer sees the entire bucket: there is no way to scope it by key.
 			pub = append(pub,
 				"$JS.API.CONSUMER.CREATE."+stream+".>",
 				"$JS.API.CONSUMER.DELETE."+stream+".>",
@@ -278,7 +279,7 @@ func (k KVAccess) subjects(vars map[string]string) (pub, sub []string, err error
 	}
 
 	if access == KVReadWrite {
-		pub = append(pub, data) // Put/Delete publican en el subject de la clave
+		pub = append(pub, data) // Put/Delete publish to the key's subject
 	}
 
 	if k.Manage {
@@ -288,8 +289,9 @@ func (k KVAccess) subjects(vars map[string]string) (pub, sub []string, err error
 			"$JS.API.STREAM.DELETE."+stream,
 			"$JS.API.STREAM.PURGE."+stream,
 		)
-		// Crear un bucket empieza por consultar si ya existe, así que administrarlo exige
-		// STREAM.INFO. Con acceso de lectura ya se concedió arriba; con `none`, no.
+		// Creating a bucket starts by checking whether it already exists, so administering it
+		// requires STREAM.INFO. With read access it was already granted above; with `none`,
+		// it was not.
 		if access == KVNone {
 			pub = append(pub, "$JS.API.STREAM.INFO."+stream)
 		}
@@ -298,7 +300,7 @@ func (k KVAccess) subjects(vars map[string]string) (pub, sub []string, err error
 	return pub, sub, nil
 }
 
-// expandAll expande una lista de subjects y valida cada resultado.
+// expandAll expands a list of subjects and validates each result.
 func expandAll(subjects []string, vars map[string]string) ([]string, error) {
 	if len(subjects) == 0 {
 		return nil, nil
@@ -317,9 +319,9 @@ func expandAll(subjects []string, vars map[string]string) ([]string, error) {
 	return out, nil
 }
 
-// expandOne reemplaza los {{placeholder}} de s. Un placeholder desconocido es un error
-// y no un reemplazo vacío: un subject con un segmento vacío nunca matchea nada, así que
-// fallar acá evita minteear permisos que silenciosamente no sirven.
+// expandOne replaces the {{placeholder}} occurrences in s. An unknown placeholder is an
+// error rather than an empty replacement: a subject with an empty segment never matches
+// anything, so failing here avoids minting permissions that silently do nothing.
 func expandOne(s string, vars map[string]string) (string, error) {
 	var missing []string
 	out := placeholderRE.ReplaceAllStringFunc(s, func(match string) string {
@@ -332,20 +334,20 @@ func expandOne(s string, vars map[string]string) (string, error) {
 		return value
 	})
 	if len(missing) > 0 {
-		return "", fmt.Errorf("%w: %s (en %q; disponibles: %s)",
+		return "", fmt.Errorf("%w: %s (in %q; available: %s)",
 			ErrUnknownPlaceholder, strings.Join(missing, ", "), s, availablePlaceholders(vars))
 	}
 	return out, nil
 }
 
-// availablePlaceholders lista los placeholders válidos, para que el error de arranque
-// diga qué se podía usar.
+// availablePlaceholders lists the valid placeholders, so the startup error can say what
+// could have been used.
 func availablePlaceholders(vars map[string]string) string {
 	names := make([]string, 0, len(vars))
 	for name := range vars {
 		names = append(names, name)
 	}
-	// Orden estable para que el mensaje de error sea reproducible.
+	// Stable order so the error message is reproducible.
 	for i := 1; i < len(names); i++ {
 		for j := i; j > 0 && names[j] < names[j-1]; j-- {
 			names[j], names[j-1] = names[j-1], names[j]
@@ -354,19 +356,19 @@ func availablePlaceholders(vars map[string]string) string {
 	return strings.Join(names, ", ")
 }
 
-// validateSubject chequea que un subject ya expandido sea válido para NATS: sin
-// segmentos vacíos y con `>` solo como último token.
+// validateSubject checks that an already-expanded subject is valid for NATS: no empty
+// segments, and `>` only as the last token.
 func validateSubject(subject string) error {
 	if subject == "" {
-		return fmt.Errorf("%w: vacío", ErrInvalidSubject)
+		return fmt.Errorf("%w: empty", ErrInvalidSubject)
 	}
 	tokens := strings.Split(subject, ".")
 	for i, tok := range tokens {
 		if tok == "" {
-			return fmt.Errorf("%w: %q tiene un segmento vacío en la posición %d", ErrInvalidSubject, subject, i)
+			return fmt.Errorf("%w: %q has an empty segment at position %d", ErrInvalidSubject, subject, i)
 		}
 		if tok == ">" && i != len(tokens)-1 {
-			return fmt.Errorf("%w: %q usa `>` sin ser el último token", ErrInvalidSubject, subject)
+			return fmt.Errorf("%w: %q uses `>` without being the last token", ErrInvalidSubject, subject)
 		}
 	}
 	return nil

@@ -1,44 +1,45 @@
-# PoC — SERVICE USER con rol `poc-service` (el servicio `demo`)
+# PoC — SERVICE USER with the `poc-service` role (the `demo` service)
 #
-# Gramática: <instancia>.<user-id>.<svc>.<method>
+# Grammar: <instance>.<user-id>.<svc>.<method>
 #
-# QUÉ DEMUESTRA
-#   Que IDENTIDAD y ENDPOINT son dos cosas distintas. Un service user también es un usuario
-#   de Zitadel: tiene su propio `sub`, y ese es su {{user_id}} igual que para una persona.
-#   Lo que lo hace un servicio es tener además un NOMBRE de endpoint ({{service}} == "demo"),
-#   que es por donde lo llaman.
+# WHAT IT DEMONSTRATES
+#   That IDENTITY and ENDPOINT are two different things. A service user is also a Zitadel
+#   user: it has its own `sub`, and that is its {{user_id}} just as it would be for a person.
+#   What makes it a service is additionally having an endpoint NAME ({{service}} == "demo"),
+#   which is how it gets called.
 #
-#   La consecuencia práctica: varias réplicas del mismo servicio comparten el endpoint
-#   —es lo que permite balancear con queue groups— aunque cada una conecte con su user id.
+#   The practical consequence: several replicas of the same service share the endpoint — that
+#   is what allows balancing with queue groups — even though each one connects with its own
+#   user id.
 #
-# CÓMO ATIENDE
-#   Se suscribe a `<instancia>.*.demo.>`: el `*` cubre el user id de CUALQUIER caller. El
-#   user id de quien llamó viene en el subject del mensaje, avalado por el callout — el
-#   servicio lo lee de ahí y no del cuerpo. Eso es lo que impide que un cliente se haga
-#   pasar por otro: el subject lo fija el permiso, no la aplicación.
+# HOW IT SERVES
+#   It subscribes to `<instance>.*.demo.>`: the `*` covers ANY caller's user id. The user id
+#   of whoever called arrives in the message's subject, vouched for by the callout — the
+#   service reads it from there and not from the body. That is what prevents one client from
+#   impersonating another: the subject is fixed by the permission, not by the application.
 
 pub:
   allow:
-    # Requests salientes bajo su propia identidad. En la PoC no hay otro servicio al que
-    # llamar; queda declarado porque es la forma del permiso en un despliegue real.
+    # Outbound requests under its own identity. In the PoC there is no other service to call;
+    # it is declared because that is the shape of the permission in a real deployment.
     - "{{instance}}.{{user_id}}.>"
 
 sub:
   allow:
-    # Atender los requests dirigidos a su endpoint, de cualquier caller.
+    # Serve the requests directed at its endpoint, from any caller.
     - "{{instance}}.*.{{service}}.>"
-    # Inbox propio (respuestas de los servicios que llame), bajo el hash de su user id
-    # igual que una persona. Es POR RÉPLICA, no por endpoint: dos réplicas con distinto
-    # service user no se roban las respuestas.
+    # Its own inbox (replies from the services it calls), under the hash of its user id just
+    # like a person. It is PER REPLICA, not per endpoint: two replicas with different service
+    # users do not steal each other's replies.
     - "_INBOX.{{user_id_hash}}.>"
 
 kv:
-  # Dueño del bucket de la prueba: `manage: true` es lo que lo habilita a CREARLO. Todo
-  # bucket necesita exactamente un servicio con manage, o no hay quién lo cree y las
-  # operaciones de datos fallan con "stream not found" sin explicar por qué.
+  # Owner of the test bucket: `manage: true` is what allows it to CREATE it. Every bucket
+  # needs exactly one service with manage, or there is nobody to create it and data
+  # operations fail with "stream not found" without explaining why.
   #
-  # `manage` es un eje SEPARADO de `access`: se puede administrar un bucket sin poder leer
-  # lo que hay adentro (access: none) o, como acá, administrarlo y además operarlo.
+  # `manage` is a SEPARATE axis from `access`: a bucket can be administered without being able
+  # to read what is inside (access: none) or, as here, administered and operated as well.
   - bucket: poc-kv
     access: read-write
     manage: true
@@ -46,6 +47,6 @@ kv:
     watch: true
 
 response:
-  # Responder los requests que atiende.
+  # Answer the requests it serves.
   max: 1
   ttl: 45s
