@@ -29,7 +29,7 @@ The identity is the **access token**. The callout verifies it, reads its roles, 
 permissions this connection gets. Two clients using the same credentials file get completely
 different permissions, because they present different tokens.
 
-## The inbox prefix is not optional
+## The inbox prefix, in hashed mode
 
 This is where most integrations lose an afternoon, because the failure says nothing: requests are
 delivered, the service replies, and **the reply never arrives**.

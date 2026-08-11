@@ -51,12 +51,11 @@ CI and the release workflow are in place. What is left is external to the reposi
 
 ### README
 
-- [ ] It is **638 lines** and still opens §9 with *"Proof of concept working"*, and the licence
-      section calls the software a proof of concept. Everything it describes is now tested and
-      documented; the framing is the last thing that says otherwise.
-- [ ] Splitting it is worth considering: the deep material (subject grammar, KV mapping, account
-      topology) could live under `docs/`, leaving the README as what-it-is + quickstart +
-      pointers.
+- [x] Rewritten as an introduction that links out, 728 lines down to 135. The reference material
+      moved into `docs/concepts.md`, `install.md`, `configuration.md` and `permissions.md`.
+- [x] The proof-of-concept framing is gone, and so is the first product's business logic: the
+      subject grammar, the person/service split and the hashed inbox are presented as the
+      conventions and options they are, not as things the service imposes.
 
 ---
 
