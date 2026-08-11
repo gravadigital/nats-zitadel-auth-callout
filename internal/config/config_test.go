@@ -17,7 +17,7 @@ func baseEnv() map[string]string {
 		"CALLOUT_APP_ACCOUNT_SK_SEED":  "SAAAA",
 		"CALLOUT_APP_ACCOUNT_PUB":      "AAAAA",
 		"CALLOUT_AUTH_ACCOUNT_SK_SEED": "SBBBB",
-		"CALLOUT_RULES_PATH":           "config/rules.yaml",
+		"CALLOUT_RULES_PATH":           "examples/rules.yaml",
 	}
 }
 
@@ -65,7 +65,7 @@ func TestConfigModeRequiresTargetAccount(t *testing.T) {
 		"CALLOUT_HANDLER_USER":        "handler",
 		"CALLOUT_HANDLER_PASSWORD":    "pass",
 		"CALLOUT_APP_ACCOUNT_SK_SEED": "SAAAA",
-		"CALLOUT_RULES_PATH":          "config/rules.yaml",
+		"CALLOUT_RULES_PATH":          "examples/rules.yaml",
 	}
 
 	_, err := loadWith(t, env)
@@ -88,7 +88,7 @@ func TestConfigModeRejectsOperatorOnlyVariables(t *testing.T) {
 				"CALLOUT_HANDLER_PASSWORD":    "pass",
 				"CALLOUT_APP_ACCOUNT_SK_SEED": "SAAAA",
 				"CALLOUT_TARGET_ACCOUNT":      "APP",
-				"CALLOUT_RULES_PATH":          "config/rules.yaml",
+				"CALLOUT_RULES_PATH":          "examples/rules.yaml",
 				name:                          "something",
 			}
 
@@ -130,7 +130,7 @@ func TestTargetAccountMustBeNameNotPubkey(t *testing.T) {
 		"CALLOUT_HANDLER_PASSWORD":    "pass",
 		"CALLOUT_APP_ACCOUNT_SK_SEED": "SAAAA",
 		"CALLOUT_TARGET_ACCOUNT":      pubkey,
-		"CALLOUT_RULES_PATH":          "config/rules.yaml",
+		"CALLOUT_RULES_PATH":          "examples/rules.yaml",
 	}
 
 	_, err := loadWith(t, env)
@@ -151,7 +151,7 @@ func TestHandlerCredentialForms(t *testing.T) {
 			"CALLOUT_HANDLER_PASSWORD":    "pass",
 			"CALLOUT_APP_ACCOUNT_SK_SEED": "SAAAA",
 			"CALLOUT_TARGET_ACCOUNT":      "APP",
-			"CALLOUT_RULES_PATH":          "config/rules.yaml",
+			"CALLOUT_RULES_PATH":          "examples/rules.yaml",
 		}
 		if _, err := loadWith(t, env); err != nil {
 			t.Fatalf("user/password should be accepted: %v", err)
@@ -164,7 +164,7 @@ func TestHandlerCredentialForms(t *testing.T) {
 			"CALLOUT_HANDLER_NKEY_SEED":   "SUAAA",
 			"CALLOUT_APP_ACCOUNT_SK_SEED": "SAAAA",
 			"CALLOUT_TARGET_ACCOUNT":      "APP",
-			"CALLOUT_RULES_PATH":          "config/rules.yaml",
+			"CALLOUT_RULES_PATH":          "examples/rules.yaml",
 		}
 		if _, err := loadWith(t, env); err != nil {
 			t.Fatalf("nkey should be accepted: %v", err)
@@ -202,7 +202,7 @@ func TestHandlerCredentialForms(t *testing.T) {
 			"CALLOUT_HANDLER_USER":        "handler",
 			"CALLOUT_APP_ACCOUNT_SK_SEED": "SAAAA",
 			"CALLOUT_TARGET_ACCOUNT":      "APP",
-			"CALLOUT_RULES_PATH":          "config/rules.yaml",
+			"CALLOUT_RULES_PATH":          "examples/rules.yaml",
 		}
 		_, err := loadWith(t, env)
 		if err == nil {

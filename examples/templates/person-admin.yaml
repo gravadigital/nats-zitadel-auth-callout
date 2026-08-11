@@ -1,0 +1,34 @@
+# PERSON with the `app-admin` role — broad permissions.
+#
+# Grammar and placeholders: see person.yaml.
+#
+# What differs from `app-user`:
+#   messages  every method of `demo`, `admin_reset` included — not just two
+#   KV        reads the WHOLE bucket; writes only its own keys
+#
+# A broad role is NOT a NATS superuser: it stays scoped to its own user id, so it cannot
+# publish while impersonating somebody else, nor read anyone else's inbox.
+
+pub:
+  allow:
+    - "{{instance}}.{{user_id}}.demo.>"
+
+sub:
+  allow:
+    - "_INBOX.{{user_id_hash}}.>"
+
+kv:
+  # Two entries over the SAME bucket with different scopes: full read, scoped write. That is
+  # how you express "sees everything, touches only its own".
+  - bucket: user-settings
+    access: read
+    keys: ">"
+    watch: true
+
+  - bucket: user-settings
+    access: read-write
+    keys: "{{user_id}}.>"
+
+response:
+  max: 1
+  ttl: 45s

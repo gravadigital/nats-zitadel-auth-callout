@@ -8,7 +8,7 @@
 // With a token at hand, the full validation path is verified as well:
 //
 //	CALLOUT_ZITADEL_ISSUER_URL=https://id.example.com \
-//	CALLOUT_TEST_TOKEN="$(./scripts/zitadel-token.sh secrets/poc-service.json)" \
+//	CALLOUT_TEST_TOKEN="$(./scripts/zitadel-token.sh secrets/app-backend.json)" \
 //	  go test -tags live -v ./internal/idp/
 package idp
 

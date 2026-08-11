@@ -92,7 +92,7 @@ type Rule struct {
 	Template string `yaml:"template"`
 }
 
-// RulesConfig is the content of config/rules.yaml.
+// RulesConfig is the content of examples/rules.yaml.
 //
 // Routing depends ONLY on the role: there is no heuristic guessing whether a token belongs
 // to a person or to a service. The rule declares it, and whoever administers Zitadel

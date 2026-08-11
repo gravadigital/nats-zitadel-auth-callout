@@ -1,0 +1,48 @@
+# PERSON with the `app-user` role — scoped permissions.
+#
+# GRAMMAR
+#   <instance>.<user-id>.<svc>.<method>
+#     instance   deployment (dev/stage/prod)
+#     user-id    WHO is calling: the token's `sub`, raw. Same for people and backends.
+#     svc        WHO it is talking to (here, `demo`)
+#     method     WHAT it is asking for
+#
+# PLACEHOLDERS
+#   {{instance}}      the deployment instance
+#   {{user_id}}       the token's `sub`, raw (note: UNDERSCORE, not `{{user-id}}`)
+#   {{user_id_hash}}  a stable hash of the user id — for the inbox prefix
+#   {{service}}       the endpoint name; only in service templates
+#
+# A deployment can declare more placeholders, sourced from token claims. See `placeholders:`
+# in the README.
+
+pub:
+  allow:
+    # An explicit allow-list: `admin_reset` is not here, so it is out of reach. With a
+    # deny-list a new method would be reachable until somebody restricted it; this way nobody
+    # reaches it until it is enabled.
+    - "{{instance}}.{{user_id}}.demo.ping"
+    - "{{instance}}.{{user_id}}.demo.echo"
+
+sub:
+  allow:
+    # The private inbox, under the HASH of the user id (not the raw id). The client MUST set
+    # this prefix when connecting (nats.CustomInboxPrefix in Go, inboxPrefix in nats.js,
+    # --inbox-prefix in the CLI): by default the library generates an _INBOX.<random> that no
+    # scoped permission authorizes, and the reply never arrives.
+    #
+    # To find the hash for a user: `go run ./cmd/session <sub>`.
+    - "_INBOX.{{user_id_hash}}.>"
+
+kv:
+  # Reads and writes ONLY under its own user id. The scoping goes into the key's subject, so
+  # the NATS server enforces it — not the application.
+  - bucket: user-settings
+    access: read-write
+    keys: "{{user_id}}.>"
+
+response:
+  # allow_responses: lets a service reply to this caller's inbox without needing an explicit
+  # pub permission toward it.
+  max: 1
+  ttl: 45s

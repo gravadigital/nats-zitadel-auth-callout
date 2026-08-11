@@ -79,7 +79,7 @@ if [[ -z "$roles" ]]; then
 fi
 echo "$roles"
 echo
-echo "Those role names are the ones that have to appear in config/rules.yaml as 'match'."
+echo "Those role names are the ones that have to appear in examples/rules.yaml as 'match'."
 
 # The derived identity, to know which subjects and which inbox will correspond to it.
 sub=$(echo "$payload" | jq -r '.sub // empty')

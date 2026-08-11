@@ -168,14 +168,14 @@ func TestMockExtraClaims(t *testing.T) {
 // TestMockBackwardCompatible pins that three-field tokens — every one in the README and the
 // scripts — keep working after the format gained a fourth field.
 func TestMockBackwardCompatible(t *testing.T) {
-	claims, err := NewMock().VerifyToken(t.Context(), "mock:zit-ana:ana@example.com:poc-user")
+	claims, err := NewMock().VerifyToken(t.Context(), "mock:zit-ana:ana@example.com:app-user")
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
 	if claims.Subject != "zit-ana" || claims.Username != "ana@example.com" {
 		t.Fatalf("unexpected identity: %+v", claims)
 	}
-	if len(claims.Roles) != 1 || claims.Roles[0] != "poc-user" {
-		t.Fatalf("expected [poc-user], got %v", claims.Roles)
+	if len(claims.Roles) != 1 || claims.Roles[0] != "app-user" {
+		t.Fatalf("expected [app-user], got %v", claims.Roles)
 	}
 }

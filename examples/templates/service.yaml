@@ -1,0 +1,50 @@
+# BACKEND with the `app-backend` role — the `demo` service.
+#
+# Grammar: <instance>.<user-id>.<svc>.<method>
+#
+# IDENTITY AND ENDPOINT ARE DIFFERENT THINGS
+#   A backend connects as a user of the identity provider like anyone else: it has its own
+#   `sub`, and that is its {{user_id}}. What makes it a service is additionally having an
+#   endpoint NAME ({{service}} == "demo"), declared in the rule, which is how it gets called.
+#
+#   The practical consequence: several replicas share the endpoint — that is what lets NATS
+#   balance with queue groups — while each connects with its own user id.
+#
+# HOW IT SERVES
+#   It subscribes to `<instance>.*.demo.>`: the `*` covers ANY caller's user id. The caller's
+#   id arrives in the subject, vouched for by the callout, so the service reads it from there
+#   rather than from the body. That is what stops one client impersonating another: the
+#   subject is fixed by the permission, not by the application.
+
+pub:
+  allow:
+    # Outbound requests under its own identity. There is no other service to call in this
+    # example; it is declared because that is the shape of the permission in a real deployment.
+    - "{{instance}}.{{user_id}}.>"
+
+sub:
+  allow:
+    # Serve the requests aimed at its endpoint, from any caller.
+    - "{{instance}}.*.{{service}}.>"
+    # Its own inbox (replies from services it calls), under the hash of its user id just like a
+    # person. It is PER REPLICA, not per endpoint: two replicas with different users do not
+    # steal each other's replies.
+    - "_INBOX.{{user_id_hash}}.>"
+
+kv:
+  # Owner of the bucket: `manage: true` is what allows it to CREATE it. Every bucket needs
+  # exactly one service with manage, or nobody can create it and data operations fail with
+  # "stream not found" without explaining why.
+  #
+  # `manage` is a SEPARATE axis from `access`: a bucket can be administered without being able
+  # to read what is inside (access: none) or, as here, administered and operated as well.
+  - bucket: user-settings
+    access: read-write
+    manage: true
+    keys: ">"
+    watch: true
+
+response:
+  # Answer the requests it serves.
+  max: 1
+  ttl: 45s

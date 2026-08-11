@@ -159,17 +159,20 @@ func Load() (*Config, error) {
 		TargetAccount:             os.Getenv("CALLOUT_TARGET_ACCOUNT"),
 		AuthAccountSigningKeySeed: os.Getenv("CALLOUT_AUTH_ACCOUNT_SK_SEED"),
 		XKeySeed:                  os.Getenv("CALLOUT_XKEY_SEED"),
-		RulesPath:                 env("CALLOUT_RULES_PATH", "config/rules.yaml"),
-		Instance:                  os.Getenv("CALLOUT_INSTANCE"),
-		IDPMode:                   env("CALLOUT_IDP_MODE", IDPModeMock),
-		ZitadelIssuerURL:          os.Getenv("CALLOUT_ZITADEL_ISSUER_URL"),
-		ZitadelProjectID:          os.Getenv("CALLOUT_ZITADEL_PROJECT_ID"),
-		OIDCIssuerURL:             os.Getenv("CALLOUT_OIDC_ISSUER_URL"),
-		OIDCRolesClaim:            os.Getenv("CALLOUT_OIDC_ROLES_CLAIM"),
-		OIDCUsernameClaim:         env("CALLOUT_OIDC_USERNAME_CLAIM", "preferred_username"),
-		OIDCAudience:              os.Getenv("CALLOUT_OIDC_AUDIENCE"),
-		InboxMode:                 env("CALLOUT_INBOX_MODE", InboxModeHashed),
-		LogLevel:                  env("CALLOUT_LOG_LEVEL", "info"),
+		// No default on purpose: defaulting to the bundled example means a deployment that
+		// forgets to mount its own configuration STARTS, serving example roles instead of
+		// failing. Requiring it turns that into a startup error naming the variable.
+		RulesPath:         os.Getenv("CALLOUT_RULES_PATH"),
+		Instance:          os.Getenv("CALLOUT_INSTANCE"),
+		IDPMode:           env("CALLOUT_IDP_MODE", IDPModeMock),
+		ZitadelIssuerURL:  os.Getenv("CALLOUT_ZITADEL_ISSUER_URL"),
+		ZitadelProjectID:  os.Getenv("CALLOUT_ZITADEL_PROJECT_ID"),
+		OIDCIssuerURL:     os.Getenv("CALLOUT_OIDC_ISSUER_URL"),
+		OIDCRolesClaim:    os.Getenv("CALLOUT_OIDC_ROLES_CLAIM"),
+		OIDCUsernameClaim: env("CALLOUT_OIDC_USERNAME_CLAIM", "preferred_username"),
+		OIDCAudience:      os.Getenv("CALLOUT_OIDC_AUDIENCE"),
+		InboxMode:         env("CALLOUT_INBOX_MODE", InboxModeHashed),
+		LogLevel:          env("CALLOUT_LOG_LEVEL", "info"),
 	}
 
 	if err := cfg.validate(); err != nil {

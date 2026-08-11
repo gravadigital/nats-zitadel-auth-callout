@@ -213,7 +213,7 @@ func TestIdentityModelComesFromTheRuleNotThePrincipal(t *testing.T) {
 	rulesPath := writeRules(t, `
 version: 1
 rules:
-  - match: poc-user
+  - match: app-user
     type: person
     template: templates/person.yaml
 `, map[string]string{"person.yaml": minimalPersonTemplate})
@@ -224,7 +224,7 @@ rules:
 	}
 
 	// The `sub` belongs to a Zitadel machine user; the rule says person.
-	id, _, decision, err := router.Resolve([]string{"poc-user"}, "100000000000000001", "poc_user", nil)
+	id, _, decision, err := router.Resolve([]string{"app-user"}, "100000000000000001", "app_user", nil)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -240,8 +240,8 @@ rules:
 	}
 	// The winning role has to be recorded: with several roles in the token, a log without it
 	// makes it impossible to tell why those permissions were granted.
-	if decision.Rule != "poc-user" {
-		t.Fatalf("expected matchedBy=poc-user, got %q", decision.Rule)
+	if decision.Rule != "app-user" {
+		t.Fatalf("expected matchedBy=app-user, got %q", decision.Rule)
 	}
 }
 
@@ -380,10 +380,10 @@ rules:
 
 // --- the configuration that ships -----------------------------------------------------
 
-// Validates config/rules.yaml and ALL of its real templates. It is the net that makes a
+// Validates examples/rules.yaml and ALL of its real templates. It is the net that makes a
 // typo in a template show up in `go test` rather than in a deploy.
 func TestShippedConfigIsValid(t *testing.T) {
-	rulesPath := filepath.Join("..", "..", "config", "rules.yaml")
+	rulesPath := filepath.Join("..", "..", "examples", "rules.yaml")
 	if _, err := os.Stat(rulesPath); err != nil {
 		t.Skipf("no shippable config at %s: %v", rulesPath, err)
 	}
@@ -395,7 +395,7 @@ func TestShippedConfigIsValid(t *testing.T) {
 
 	// Every declared role has to resolve to expandable permissions.
 	for _, roles := range [][]string{
-		{"poc-admin"}, {"poc-user"}, {"poc-service"},
+		{"app-admin"}, {"app-user"}, {"app-backend"},
 	} {
 		t.Run(roles[0], func(t *testing.T) {
 			id, perms, decision, err := router.Resolve(roles, "test-sub", "test", nil)
@@ -429,7 +429,7 @@ func TestShippedConfigIsValid(t *testing.T) {
 // A template loader cannot check this invariant — it is global to the config — so it is
 // verified here.
 func TestEveryKVBucketHasExactlyOneManager(t *testing.T) {
-	rulesPath := filepath.Join("..", "..", "config", "rules.yaml")
+	rulesPath := filepath.Join("..", "..", "examples", "rules.yaml")
 	if _, err := os.Stat(rulesPath); err != nil {
 		t.Skipf("no shippable config: %v", err)
 	}
@@ -475,7 +475,7 @@ func TestEveryKVBucketHasExactlyOneManager(t *testing.T) {
 // rests on: if a client could publish under another user id, the receiver could not trust
 // the identity it reads from the subject and every service would have to re-authorize.
 func TestPersonTemplatesPublishOnlyUnderOwnUserID(t *testing.T) {
-	rulesPath := filepath.Join("..", "..", "config", "rules.yaml")
+	rulesPath := filepath.Join("..", "..", "examples", "rules.yaml")
 	if _, err := os.Stat(rulesPath); err != nil {
 		t.Skipf("no shippable config: %v", err)
 	}
@@ -485,7 +485,7 @@ func TestPersonTemplatesPublishOnlyUnderOwnUserID(t *testing.T) {
 		t.Fatalf("NewRouterFromFile: %v", err)
 	}
 
-	for _, role := range []string{"poc-admin", "poc-user"} {
+	for _, role := range []string{"app-admin", "app-user"} {
 		id, perms, decision, err := router.Resolve([]string{role}, "sub-"+role, role, nil)
 		if err != nil {
 			t.Fatalf("Resolve(%s): %v", role, err)
@@ -510,7 +510,7 @@ func TestPersonTemplatesPublishOnlyUnderOwnUserID(t *testing.T) {
 // With no catch-all in the shipped config, a valid Zitadel token carrying an undeclared role
 // does NOT connect. It is one of the things the test against real Zitadel verifies.
 func TestShippedConfigRejectsUnknownRole(t *testing.T) {
-	rulesPath := filepath.Join("..", "..", "config", "rules.yaml")
+	rulesPath := filepath.Join("..", "..", "examples", "rules.yaml")
 	if _, err := os.Stat(rulesPath); err != nil {
 		t.Skipf("no shippable config: %v", err)
 	}

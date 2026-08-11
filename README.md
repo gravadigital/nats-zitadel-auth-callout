@@ -13,9 +13,10 @@ and config mode— so adopting it does not require migrating your server. What t
 provider is, what your subjects look like, and whether clients scope their inboxes are all
 configuration. See [§10 Using it on an existing NATS](#10-using-it-on-an-existing-nats).
 
-> **Status: the mechanism is production-shaped; the `config/` files are examples.** The subjects
-> in `config/` are a `demo` service with three methods, chosen to validate the mechanism rather
-> than any particular domain — replace them with your own.
+> **Status: the mechanism is production-shaped; everything under `examples/` is an example.**
+> Those roles and subjects describe a made-up application, chosen to show the mechanism rather
+> than any particular domain — copy them and replace them with your own. `CALLOUT_RULES_PATH`
+> is required precisely so a deployment cannot fall back to them by accident.
 >
 > To run it against real Zitadel: **[docs/zitadel.md](docs/zitadel.md)**.
 
@@ -117,11 +118,17 @@ pub       dev.100000000000000001.<svc>.<method>
 ## 3. The permissions: two files, no recompiling
 
 ```
-config/rules.yaml        token role  →  (identity type, template)   [first-match-wins]
-config/templates/*.yaml  template    →  pub/sub permissions + KV access
+examples/rules.yaml        token role  →  (identity type, template)   [first-match-wins]
+examples/templates/*.yaml  template    →  pub/sub permissions + KV access
 ```
 
 Both are mounted by path and read at startup. Changing who can do what does **not** recompile.
+`CALLOUT_RULES_PATH` points at the rules file, and the templates resolve relative to *its*
+directory — so moving the whole configuration elsewhere means changing one variable.
+
+A worked example of both files, plus a server configuration for each mode, is in
+**[examples/](examples/)**. They are the same in both modes: the server mode changes how the
+callout signs the User JWT, not which permissions go into it.
 
 **The role is the only thing that decides.** There is no heuristic guessing whether a token
 belongs to a person or to a service: `type` in the rule declares it, and whoever administers
@@ -129,24 +136,24 @@ Zitadel assigns the role. That way "what can X do?" is answered by reading two f
 running anything.
 
 ```yaml
-# rules.yaml (the PoC's)
+# examples/rules.yaml
 rules:
-  - match: poc-admin        # person, broad permissions
+  - match: app-admin        # person, broad permissions
     type: person
-    template: templates/poc-person-admin.yaml
+    template: templates/person-admin.yaml
 
-  - match: poc-user         # person, scoped permissions
+  - match: app-user         # person, scoped permissions
     type: person
-    template: templates/poc-person.yaml
+    template: templates/person.yaml
 
-  - match: poc-service      # machine user
+  - match: app-backend      # machine user
     type: service
     service: demo           # its endpoint (its user id comes from the token)
-    template: templates/poc-service.yaml
+    template: templates/service.yaml
 ```
 
-With no match, **the connection is rejected**. There are no default permissions — the PoC
-declares no catch-all on purpose, so that this can be verified.
+With no match, **the connection is rejected**. There are no default permissions — the example
+declares no catch-all on purpose.
 
 Order matters: if a token can carry two roles, the one placed **higher** wins. Put the most
 restrictive one first.
@@ -171,7 +178,7 @@ pub:
 sub:
   allow: ["_INBOX.{{user_id_hash}}.>"]
 kv:
-  - bucket: poc-kv
+  - bucket: user-settings
     access: read-write          # none | read | read-write   (data)
     manage: false               # the bucket's lifecycle      (orthogonal)
     keys: "{{user_id}}.>"       # WHICH keys it reaches
@@ -220,7 +227,7 @@ and it is the server that enforces it:
 
 ```yaml
 kv:
-  - bucket: poc-kv
+  - bucket: user-settings
     access: read-write
     keys: "{{user_id}}.>"     # writes and reads ONLY its own
 ```
@@ -322,20 +329,20 @@ inbox carries its **hash** (`$IHASH`).
 NATS="nats --server nats://127.0.0.1:4322 --creds nats/out/sentinel-client.creds"
 UID=zit-ana
 IHASH=$(go run ./cmd/session "$UID" dev | awk '/^inbox/{sub(/^_INBOX\./,"",$2); print $2}')
-U="$NATS --token mock:$UID:ana@example.com:poc-user --inbox-prefix _INBOX.$IHASH"
+U="$NATS --token mock:$UID:ana@example.com:app-user --inbox-prefix _INBOX.$IHASH"
 
 # Under its own user id and an enabled method: OK
 $U pub "dev.$UID.demo.ping" hello
 
-# A poc-admin-only method: Permissions Violation
+# A app-admin-only method: Permissions Violation
 $U pub "dev.$UID.demo.admin_reset" x
 
 # Someone else's user id: Permissions Violation
 $U pub "dev.other.demo.ping" x
 
-# Per-user scoped KV (the bucket is created beforehand by the poc-service service user)
-$U kv put poc-kv "$UID.theme" dark    # OK
-$U kv put poc-kv "other.theme" x      # fails
+# Per-user scoped KV (the bucket is created beforehand by the app-backend service user)
+$U kv put user-settings "$UID.theme" dark    # OK
+$U kv put user-settings "other.theme" x      # fails
 ```
 
 > **For what is supposed to fail, use `pub` and not `request`.** A denied publish is reported
@@ -395,10 +402,10 @@ internal/authz                    the permission engine: role routing, templates
 internal/idp                      token verification (Zitadel, generic OIDC, mock for dev/CI)
 internal/callout                  the auth callout protocol (XKey, JWTs, signing, server modes)
 internal/config                   environment → Config, with per-mode validation
-config/                           rules.yaml + the templates (mounted by path)
-nats/bootstrap.sh                 generates the operator-mode identity
-nats/nats-server.conf             operator-mode server (what bootstrap.sh feeds)
-nats/nats-server.config-mode.conf CONFIG-MODE server — the file to copy for an existing NATS
+examples/                         a worked example: rules.yaml, templates, and a server
+                                  configuration + variables for each mode. Copy, do not keep
+nats/bootstrap.sh                 generates a throwaway operator-mode identity for `make run`
+nats/nats-server.conf             the local demo server (what bootstrap.sh feeds)
 nats/.env.example                 every variable, with what applies to which mode
 scripts/run.sh                    make run
 scripts/zitadel-token.sh          access token for a service user (key JSON or client secret)
@@ -415,9 +422,10 @@ force editing any configuration.
 
 ## 8. Adding a role or a service
 
-1. Create the template in `config/templates/`.
-2. Add the rule in `config/rules.yaml`. **Order matters** (first-match-wins): the most
-   restrictive on top, and `"*"` at the end if you want a catch-all (the PoC has none).
+1. Create the template in your own `templates/` directory (start from `examples/templates/`).
+2. Add the rule in your `rules.yaml`. **Order matters** (first-match-wins): the most restrictive
+   on top, and `"*"` last if you want a catch-all. A catch-all anywhere else, or a repeated
+   `match`, makes the rules below it unreachable and fails at startup.
 3. `make test` — validates that the template loads, that it expands with no dangling
    placeholders, that the routing picks the right one, and that every bucket still has exactly
    one administrator.
@@ -433,10 +441,10 @@ Nothing needs recompiling or restarting other than the callout.
 **Proof of concept working.** Verified end-to-end against a real `nats-server` (mock mode, with
 the config in `config/`) — the runbook's 16 cases:
 
-- **messages:** `poc-user` reaches only its own methods; `poc-admin` reaches all of them; neither
+- **messages:** `app-user` reaches only its own methods; `app-admin` reaches all of them; neither
   can publish under someone else's user id, cross instances, or subscribe as if it were the
   service;
-- **KV, same bucket and different scopes per role:** `poc-user` only its own key; `poc-admin`
+- **KV, same bucket and different scopes per role:** `app-user` only its own key; `app-admin`
   reads all of them and writes only its own; the service user creates and operates it;
 - **rejections:** with no token, with a malformed token, or with a role that is not in
   `rules.yaml` (there is no catch-all) → `Authorization Violation`.
@@ -482,7 +490,7 @@ new variable.
 
 **Config mode is the one for adopting an existing NATS**: no operator, no `nsc` store, no
 resolver, no reissuing credentials. Copy
-[nats/nats-server.config-mode.conf](nats/nats-server.config-mode.conf) — it is commented with the
+[examples/config-mode/nats-server.conf](examples/config-mode/nats-server.conf) — it is commented with the
 three mistakes that cost the most, and a test asserts it stays valid.
 
 Three of those are worth repeating here, because none of them fails loudly:

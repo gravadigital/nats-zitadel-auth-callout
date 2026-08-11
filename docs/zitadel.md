@@ -32,9 +32,9 @@ Create one role per rule in your `rules.yaml`. The shipped example config expect
 
 | Key | What for |
 |---|---|
-| `poc-user` | person with scoped permissions |
-| `poc-admin` | person with broad permissions |
-| `poc-service` | the service user serving the `demo` endpoint |
+| `app-user` | person with scoped permissions |
+| `app-admin` | person with broad permissions |
+| `app-backend` | the service user serving the `demo` endpoint |
 
 ### 1.3 The users
 

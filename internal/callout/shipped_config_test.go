@@ -10,7 +10,7 @@ import (
 )
 
 // shippedConfigModeConf is the example an adopting team copies.
-const shippedConfigModeConf = "../../nats/nats-server.config-mode.conf"
+const shippedConfigModeConf = "../../examples/config-mode/nats-server.conf"
 
 // TestShippedConfigModeConfIsValid keeps the shipped example honest: it has to parse with the
 // real server parser and declare the callout the way the documentation claims.

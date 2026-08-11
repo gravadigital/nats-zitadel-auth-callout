@@ -33,7 +33,7 @@ export CALLOUT_NATS_DIR
 set -a; . "$NATS_DIR/out/callout-env.sh"; set +a
 
 # Templates are resolved relative to rules.yaml, so its path is all that is needed.
-export CALLOUT_RULES_PATH="${CALLOUT_RULES_PATH:-$REPO_ROOT/config/rules.yaml}"
+export CALLOUT_RULES_PATH="${CALLOUT_RULES_PATH:-$REPO_ROOT/examples/rules.yaml}"
 export CALLOUT_NATS_URL="${CALLOUT_NATS_URL:-nats://127.0.0.1:4322}"
 
 echo "==> Starting nats-server"

@@ -56,7 +56,7 @@ const (
 	KVReadWrite = "read-write"
 )
 
-// Template is a permission template: the YAML as written in config/templates/. Subjects may
+// Template is a permission template: the YAML as written in examples/templates/. Subjects may
 // carry {{...}} placeholders that are expanded per session with the already-authenticated
 // identity (see Identity.placeholders).
 type Template struct {

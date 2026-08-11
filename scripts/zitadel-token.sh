@@ -13,7 +13,7 @@
 #      Simpler: a single curl, nothing to sign.
 #
 # Usage:
-#   ZITADEL_ISSUER_URL=https://id.example.com ./scripts/zitadel-token.sh secrets/poc-user.json
+#   ZITADEL_ISSUER_URL=https://id.example.com ./scripts/zitadel-token.sh secrets/app-user.json
 #   cat creds.json | ZITADEL_ISSUER_URL=https://id.example.com ./scripts/zitadel-token.sh
 #
 # Variables:

@@ -20,7 +20,7 @@ import (
 // server's actual acceptance rules rather than our reading of them.
 
 // testRules writes a minimal rules.yaml + template pair and returns a Router over them. It
-// keeps these tests independent of config/rules.yaml, which is a PoC artifact free to change.
+// keeps these tests independent of examples/rules.yaml, which is a PoC artifact free to change.
 func testRules(t *testing.T, instance string) *authz.Router {
 	t.Helper()
 
