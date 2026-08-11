@@ -593,6 +593,27 @@ A variable the selected mode does not read is an **error**, not silently ignored
 `CALLOUT_APP_ACCOUNT_PUB` in config mode fails at startup and says why, rather than leaving you
 to believe you configured something the service never reads.
 
+### 10.6 Checking the wiring before serving traffic
+
+```sh
+auth-callout verify --client-creds /path/to/client.creds     # operator mode
+auth-callout verify --client-user NAME --client-password ... # config mode
+```
+
+`verify` loads the same configuration the service would, connects the same way, and reports what
+it finds. It exits non-zero on any failure, so it works as a deployment gate.
+
+It checks that the rules and templates load, that the handler can connect and actually serve
+`$SYS.REQ.USER.AUTH`, whether requests are encrypted — and, given a client credential, **that
+the client does not bypass the callout**.
+
+That last one is why the command exists. A client user left in `auth_users` (or `--auth-user`) is
+authorized by the server *directly*: it connects fine, keeps whatever permissions that user
+carries, and the callout never runs. Nothing at runtime reveals it, because a bypassing client
+and a properly authorized one both connect. `verify` catches it by confirming the server
+**refuses** that client while the callout is not answering — which is only observable before the
+service starts, and is why this is a separate command rather than a startup check.
+
 ---
 
 ## 11. License

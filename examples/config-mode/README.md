@@ -35,7 +35,17 @@ shows up as an authorization failure, not as a startup error**, so change them t
 3. **Restart the server.** `auth_callout` is not reloadable — every field in it needs a restart,
    not a `nats-server --signal reload`.
 
-4. **Start the callout** and check its first log line says `serverMode=config` and the IdP mode
+4. **Check the wiring before serving traffic**, with the same configuration the service will
+   use:
+
+   ```sh
+   auth-callout verify --client-user callout-client --client-password '...'
+   ```
+
+   It exits non-zero on any failure, so it works as a deployment gate. Pass the client
+   credentials: without them it skips the bypass check, which is the highest-impact one here.
+
+5. **Start the callout** and check its first log line says `serverMode=config` and the IdP mode
    you expect. If it says `idp=mock`, it did not pick up your configuration, and mock mode
    accepts any identity a client claims.
 

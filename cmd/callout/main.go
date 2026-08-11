@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -29,10 +30,58 @@ import (
 const natsConnectTimeout = 10 * time.Second
 
 func main() {
+	args := os.Args[1:]
+
+	// One subcommand, and it is deliberately not a flag on the service: `verify` has to run
+	// while the callout is NOT serving. Its most valuable check — that a client credential does
+	// not bypass the callout — works by confirming the server REFUSES that client, which is only
+	// observable before anything answers on the callout subject.
+	if len(args) > 0 && args[0] == "verify" {
+		err := runVerify(args[1:])
+		if err == nil {
+			return
+		}
+		// A failed verification has already printed its report; anything else is an error in
+		// running the check at all and still needs saying.
+		if !errors.Is(err, errVerifyFailed) {
+			fmt.Fprintf(os.Stderr, "auth-callout verify: %v\n", err)
+		}
+		os.Exit(1)
+	}
+
+	if len(args) > 0 {
+		switch args[0] {
+		case "-h", "--help", "help":
+			usage()
+			return
+		default:
+			fmt.Fprintf(os.Stderr, "auth-callout: unknown argument %q\n\n", args[0])
+			usage()
+			os.Exit(2)
+		}
+	}
+
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "auth-callout: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// usage prints what the binary does. It is short on purpose: everything else is environment
+// variables, and those are documented where they are set rather than here.
+func usage() {
+	fmt.Fprint(os.Stderr, `nats-zitadel-auth-callout — authenticates NATS connections against an OIDC provider.
+
+  auth-callout           run the service
+  auth-callout verify    check a deployment's wiring without serving traffic
+
+Configuration comes from the environment; see the README and examples/.
+
+verify options:
+  --client-creds PATH        credentials clients connect with (operator mode)
+  --client-user NAME         the same, for config mode
+  --client-password PASS
+`)
 }
 
 func run() error {
@@ -169,6 +218,85 @@ func run() error {
 	log.Info().Msg("shutting down")
 	return nil
 }
+
+// runVerify checks a deployment's wiring and reports what it found.
+//
+// It loads the same configuration the service would and connects the same way, so what it
+// verifies is the real deployment rather than a description of it. It never starts serving:
+// the bypass check depends on the callout NOT answering.
+//
+// Exit code 1 on any failure, so it is usable as a deployment gate.
+func runVerify(args []string) error {
+	flags := flag.NewFlagSet("verify", flag.ContinueOnError)
+	clientCreds := flags.String("client-creds", "", "credentials file clients connect with (operator mode)")
+	clientUser := flags.String("client-user", "", "user clients connect with (config mode)")
+	clientPassword := flags.String("client-password", "", "password for --client-user")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+
+	// Loading the configuration is itself the first check: per-mode validation rejects a
+	// variable the selected mode does not read, and a missing rules path, before anything
+	// touches the network.
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Verifying: serverMode=%s idp=%s nats=%s\n\n", cfg.ServerMode, cfg.IDPMode, cfg.NATSURL)
+
+	// The rules and templates load exactly as the service would load them, so a broken
+	// configuration is reported here rather than at the next restart.
+	if _, err := authz.NewRouterFromFile(cfg.RulesPath, cfg.Instance,
+		authz.WithInboxMode(authz.InboxMode(cfg.InboxMode)),
+	); err != nil {
+		fmt.Printf("FAIL  permission configuration\n      %v\n", err)
+		fmt.Println("\n0 passed, 0 warning(s), 1 failure(s)\n\nThis deployment is not ready to serve traffic.")
+		return errVerifyFailed
+	}
+
+	handlerAuth, err := handlerAuthOption(cfg)
+	if err != nil {
+		return err
+	}
+
+	// A short timeout and no reconnection: this is a probe, and a server that does not answer
+	// promptly is itself the finding.
+	nc, err := nats.Connect(cfg.NATSURL, handlerAuth,
+		nats.Name("nats-auth-callout-verify"),
+		nats.Timeout(natsConnectTimeout),
+		nats.MaxReconnects(0),
+	)
+	if err != nil {
+		fmt.Printf("FAIL  handler connection\n      cannot connect as the callout handler: %v\n", err)
+		fmt.Printf("      fix: check CALLOUT_NATS_URL, and that the handler credential form matches CALLOUT_SERVER_MODE=%s and is declared in %s\n",
+			cfg.ServerMode, authUsersFieldFor(cfg.ServerMode))
+		fmt.Println("\n0 passed, 0 warning(s), 1 failure(s)\n\nThis deployment is not ready to serve traffic.")
+		return errVerifyFailed
+	}
+	defer nc.Close()
+
+	report := callout.Verify(callout.VerifyInput{
+		Conn:           nc,
+		Mode:           callout.Mode(cfg.ServerMode),
+		ClientCreds:    *clientCreds,
+		ClientUser:     *clientUser,
+		ClientPassword: *clientPassword,
+		NATSURL:        cfg.NATSURL,
+		XKeyConfigured: cfg.XKeySeed != "",
+		TargetAccount:  cfg.TargetAccount,
+	})
+
+	fmt.Print(report.String())
+	if !report.OK() {
+		return errVerifyFailed
+	}
+	return nil
+}
+
+// errVerifyFailed makes `verify` exit non-zero without printing a second error line: the report
+// already said everything, and a trailing "error:" would only add noise.
+var errVerifyFailed = errors.New("verification failed")
 
 // handlerAuthOption builds the nats.Option for the callout's OWN connection.
 //

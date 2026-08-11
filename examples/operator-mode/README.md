@@ -67,7 +67,18 @@ Extract both seeds from your `nsc` store — they live under
 
 ## Checking it worked
 
-The callout's first log line should say `serverMode=operator` and the IdP mode you expect. A
-connection that is refused with `Authorization Violation` before the callout logs anything means
-the request never reached it — check that the client is connecting with the client user and not
-the handler.
+Before serving traffic, run the pre-flight check with the same configuration the service uses:
+
+```sh
+auth-callout verify --client-creds /path/to/client.creds
+```
+
+It confirms the handler can connect and serve `$SYS.REQ.USER.AUTH`, that requests are
+encrypted, and — the important one — that the **client credential does not bypass the callout**.
+Pass `--client-creds`: without it that check is skipped. It exits non-zero on failure, so it
+works as a deployment gate.
+
+Then start the callout: its first log line should say `serverMode=operator` and the IdP mode you
+expect. A connection refused with `Authorization Violation` before the callout logs anything
+means the request never reached it — check that the client is connecting with the client user
+and not the handler.

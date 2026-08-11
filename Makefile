@@ -31,6 +31,10 @@ build: ## Compile the binary into bin/callout
 test: ## Tests. Includes both server modes against an in-process nats-server
 	go test ./...
 
+.PHONY: verify
+verify: build ## Check a deployment's wiring without serving traffic (pass ARGS=--client-creds=...)
+	@./bin/callout verify $(ARGS)
+
 .PHONY: test-live
 test-live: ## Verify connectivity with real Zitadel (needs CALLOUT_ZITADEL_ISSUER_URL)
 	@if [[ -z "$$CALLOUT_ZITADEL_ISSUER_URL" && -f nats/.env ]]; then set -a; . ./nats/.env; set +a; fi; \
