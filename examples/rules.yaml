@@ -1,0 +1,34 @@
+# rules.yaml — role -> (identity type, permission template)
+#
+# This file is THE SAME in both server modes. The mode changes how the callout signs the User
+# JWT it mints; it does not change which permissions go into it.
+#
+# HOW IT IS EVALUATED
+#   Rules are walked IN ORDER and the FIRST whose `match` is one of the token's roles wins.
+#   With no match the connection is REJECTED — there are no default permissions. This example
+#   declares no catch-all, so a valid token carrying an unlisted role does not connect.
+#
+# THE ROLE IS THE ONLY THING THAT DECIDES
+#   Nothing guesses whether a token belongs to a person or to a backend: `type` declares it,
+#   and whoever administers the identity provider assigns the role. A machine user holding a
+#   role whose rule says `type: person` gets a person identity — which is what lets you
+#   exercise every path without a browser login.
+
+version: 1
+
+rules:
+  # A person with broad permissions: every method of `demo`, and read access across the bucket.
+  - match: app-admin
+    type: person
+    template: templates/person-admin.yaml
+
+  # A person with scoped permissions: two methods, and in KV only their own keys.
+  - match: app-user
+    type: person
+    template: templates/person.yaml
+
+  # A backend: serves the `demo` endpoint and owns the bucket.
+  - match: app-backend
+    type: service
+    service: demo
+    template: templates/service.yaml
