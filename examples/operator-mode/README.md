@@ -61,9 +61,26 @@ Also different, and also easy to confuse:
 | APP account signing key | the **User JWT** | decides which account the user lands in (`IssuerAccount`) |
 | AUTH account signing key | the **authorization_response** | it is the callout issuer the server has configured |
 
-Extract both seeds from your `nsc` store — they live under
-`<store>/keys/<initial>/<2 chars>/<KEY>.nk` — and give them to the callout as
-`CALLOUT_APP_ACCOUNT_SK_SEED` and `CALLOUT_AUTH_ACCOUNT_SK_SEED`. See `env.example`.
+Getting these two backwards produces an `Authorization Violation` with nothing in any log
+pointing at the cause, so rather than picking the seeds out of the store by hand:
+
+```sh
+./scripts/nsc-extract.sh --store ~/.local/share/nats/nsc/stores/myoperator --out ./secrets
+```
+
+It reads the callout configuration out of the account JWT and works the topology out from
+there — the account carrying `auth_users` is the AUTH account, its `allowed_accounts` is the
+account clients land in, its `auth_users` is the handler — so nothing has to be named on the
+command line and nothing can be named wrongly. It writes the seeds, the handler creds and a
+`callout.env` with each value already under the right variable.
+
+Run it where the `nsc` store is, which is normally an operator's workstation rather than the
+machine that will run the callout: the service never touches `nsc`, it only reads seeds and
+public keys from its environment.
+
+One thing it cannot always find is the XKey seed: `nsc` does not keep curve keys in its store,
+so if it was not saved next to it, the generated file says where to point
+`CALLOUT_XKEY_SEED` instead of guessing.
 
 ## Checking it worked
 

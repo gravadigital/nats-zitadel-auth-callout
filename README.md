@@ -413,6 +413,10 @@ scripts/zitadel-token.sh          access token for a service user (key JSON or c
 scripts/token-info.sh             what a token carries and why the callout would reject it
 docs/zitadel.md                   configuring Zitadel: roles, service users, token checks
 docs/troubleshooting.md           symptom → cause, for when something does not work
+docs/client.md                    connecting a client: credentials, token, inbox prefix
+examples/client/                  a runnable client, the reference for the three steps
+scripts/nsc-plan.sh               prints the nsc commands to provision an existing NATS
+scripts/nsc-extract.sh            reads an nsc store and writes the callout's environment
 ```
 
 The configuration is split into two sources on purpose: **`nats/.env`** carries what a person

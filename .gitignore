@@ -11,5 +11,7 @@
 # Binaries.
 /bin/
 
-# Service user credentials downloaded from Zitadel.
+# Service user credentials downloaded from the identity provider, and the default output of
+# scripts/nsc-extract.sh: signing key seeds, the handler creds and the XKey seed.
 /secrets/
+/client
