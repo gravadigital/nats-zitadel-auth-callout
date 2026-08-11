@@ -82,3 +82,7 @@ Then start the callout: its first log line should say `serverMode=operator` and 
 expect. A connection refused with `Authorization Violation` before the callout logs anything
 means the request never reached it — check that the client is connecting with the client user
 and not the handler.
+
+---
+
+If something does not work, see [troubleshooting](../../docs/troubleshooting.md).

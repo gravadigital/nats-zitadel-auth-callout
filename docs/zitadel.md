@@ -151,21 +151,18 @@ at the cost of the per-user reply isolation. See the README.
 
 ---
 
-## 5. When something fails
+## 5. Zitadel-specific behaviour worth knowing
 
-**A permissions violation on a JetStream subject does not look like one.** The request goes
-unanswered and the client reports a timeout (`context deadline exceeded`) rather than a
-permissions error. The exact missing subject is in the `nats-server` log, as a
-`Publish Violation`.
-
-**For cases that are supposed to fail, test with `pub`, not `request`.** A denied publish is
-reported asynchronously: `nats request` sends it, gets no reply, and **exits 0 printing
-nothing** — it looks like it worked. `nats pub` reports `Permissions Violation` immediately.
+For symptoms in general — connections refused, clients that can do nothing, KV timing out — see
+**[troubleshooting.md](troubleshooting.md)**. Two things below are properties of *this* verifier
+rather than of the wiring, so they belong here.
 
 **A revoked token stays valid until it expires.** Verification is local against the JWKS, with no
 introspection call per connection, so revocation in Zitadel is not observed until the token's
 `exp`. The minted NATS session expires with the token, so the exposure is bounded by the token
-lifetime you configure in Zitadel.
+lifetime you configure in Zitadel — that setting is what to tune if this matters to you.
 
 **Key rotation needs no restart.** The JWKS is refreshed periodically, and a token signed with an
-unknown key triggers one immediate, rate-limited refetch.
+unknown key triggers one immediate, rate-limited refetch. The rate limit exists because that path
+runs *before* authentication: without it, a token with a made-up key id would let anyone force a
+request to Zitadel.

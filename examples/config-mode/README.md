@@ -76,3 +76,7 @@ callout its own account.
 **Forgetting `jetstream: enabled` on the target account.** Once an `accounts{}` block exists,
 JetStream is per-account and off by default. A KV permission then fails as a client **timeout**,
 not as a permissions violation — the least obvious failure in this whole system.
+
+---
+
+If something does not work, see [troubleshooting](../../docs/troubleshooting.md).

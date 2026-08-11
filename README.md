@@ -19,6 +19,7 @@ configuration. See [§10 Using it on an existing NATS](#10-using-it-on-an-existi
 > is required precisely so a deployment cannot fall back to them by accident.
 >
 > To run it against real Zitadel: **[docs/zitadel.md](docs/zitadel.md)**.
+> When something does not work: **[docs/troubleshooting.md](docs/troubleshooting.md)**.
 
 ---
 
@@ -411,6 +412,7 @@ scripts/run.sh                    make run
 scripts/zitadel-token.sh          access token for a service user (key JSON or client secret)
 scripts/token-info.sh             what a token carries and why the callout would reject it
 docs/zitadel.md                   configuring Zitadel: roles, service users, token checks
+docs/troubleshooting.md           symptom → cause, for when something does not work
 ```
 
 The configuration is split into two sources on purpose: **`nats/.env`** carries what a person
