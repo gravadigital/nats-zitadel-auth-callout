@@ -1,0 +1,70 @@
+name: CI
+
+# Runs on every pull request and on main. It never publishes anything: releases are cut from
+# tags, by release.yml.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege. The default token is broader than anything here needs, and this workflow
+# only ever reads the repository.
+permissions:
+  contents: read
+
+concurrency:
+  # A new push supersedes the run in flight for the same ref. Pull requests get cancelled;
+  # main does not, so its history of runs stays complete.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: fmt, vet and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed # v5.1.0
+        with:
+          # `stable` rather than go.mod's `go 1.26`, which pins no patch release. govulncheck
+          # reports standard-library vulnerabilities against the toolchain that built the code,
+          # so building on an outdated patch turns a fixed CVE into a failing check.
+          go-version: stable
+          cache: true
+
+      # The same target a developer runs locally: gofmt, go vet, go test. Keeping CI and the
+      # Makefile identical means a green local run means a green CI run.
+      #
+      # The tests stand up real nats-servers in-process, so nothing else has to be provisioned
+      # here, but they do take around fifteen seconds.
+      - name: make ci
+        run: make ci
+
+  vulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-go@41dfa10bad2bb2ae585af6ee5bb4d7d973ad74ed # v5.1.0
+        with:
+          # `stable` rather than go.mod's `go 1.26`, which pins no patch release. govulncheck
+          # reports standard-library vulnerabilities against the toolchain that built the code,
+          # so building on an outdated patch turns a fixed CVE into a failing check.
+          go-version: stable
+          cache: true
+
+      # govulncheck reports only vulnerabilities on code paths this binary actually reaches,
+      # so it is quiet enough to keep as a required check rather than as advisory noise.
+      #
+      # It is a separate job on purpose: a vulnerability disclosed in a dependency should not
+      # make it look like the tests broke.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...

@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -28,6 +30,45 @@ import (
 
 // natsConnectTimeout bounds startup: with no NATS the service has nothing to do.
 const natsConnectTimeout = 10 * time.Second
+
+// Build information, set with -ldflags at release time:
+//
+//	-X main.version=v1.2.3 -X main.commit=abc1234 -X main.buildDate=2026-01-01T00:00:00Z
+//
+// A published image nobody can ask "which version are you?" is a real operational problem: it
+// turns every bug report into a guess about what is actually running.
+var (
+	version   = ""
+	commit    = ""
+	buildDate = ""
+)
+
+// buildVersion is the version alone, for the startup log line.
+//
+// When ldflags were not set — `go build` during development, or `go install` from a module
+// path — it falls back to the version the Go toolchain records in the binary, so the answer is
+// still useful rather than empty.
+func buildVersion() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+		return info.Main.Version
+	}
+	return "devel"
+}
+
+// versionString describes this build in full, for `auth-callout version`.
+func versionString() string {
+	out := "nats-zitadel-auth-callout " + buildVersion()
+	if commit != "" {
+		out += " (" + commit + ")"
+	}
+	if buildDate != "" {
+		out += " built " + buildDate
+	}
+	return out + "\n" + runtime.Version() + " " + runtime.GOOS + "/" + runtime.GOARCH
+}
 
 func main() {
 	args := os.Args[1:]
@@ -54,6 +95,9 @@ func main() {
 		case "-h", "--help", "help":
 			usage()
 			return
+		case "version", "--version", "-v":
+			fmt.Println(versionString())
+			return
 		default:
 			fmt.Fprintf(os.Stderr, "auth-callout: unknown argument %q\n\n", args[0])
 			usage()
@@ -74,6 +118,7 @@ func usage() {
 
   auth-callout           run the service
   auth-callout verify    check a deployment's wiring without serving traffic
+  auth-callout version   print the version of this build
 
 Configuration comes from the environment; see the README and examples/.
 
@@ -104,6 +149,9 @@ func run() error {
 	// The IdP mode is logged first and prominently: it is the difference between validating
 	// against Zitadel and accepting any identity the client claims to have.
 	log.Info().
+		// Which build is running belongs on the first line: it is the first thing anyone asks
+		// when a deployment behaves differently than the documentation says.
+		Str("version", buildVersion()).
 		Str("idp", cfg.IDPMode).
 		// The server mode decides how the User JWT names the target account, so it belongs on
 		// the same line as the IdP: between them they describe the whole authorization path.

@@ -25,7 +25,20 @@ run: bootstrap ## Bring up NATS + the callout in the foreground
 .PHONY: build
 build: ## Compile the binary into bin/callout
 	@mkdir -p bin
-	go build -o bin/callout ./cmd/callout
+	go build -ldflags "$(LDFLAGS)" -o bin/callout ./cmd/callout
+
+# Build metadata. VERSION comes from the current tag when there is one, so a local build of a
+# tagged commit reports the same version the release would.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo devel)
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+LDFLAGS := -X main.version=$(VERSION) -X main.commit=$(COMMIT)
+
+.PHONY: docker
+docker: ## Build the container image locally, tagged with the current version
+	docker build \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg COMMIT=$(COMMIT) \
+	  -t nats-zitadel-auth-callout:$(VERSION) .
 
 .PHONY: test
 test: ## Tests. Includes both server modes against an in-process nats-server

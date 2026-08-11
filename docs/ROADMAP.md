@@ -25,7 +25,7 @@ Last reviewed: 2026-08-11, against the working tree — not from memory.
 | 2. Identity provider | **mostly done** — one small item left |
 | 3. Configuration model | **done** — optional file, environment overrides it |
 | 4. Adopting an existing NATS | **done** |
-| 5. CI/CD and publishing | **not started** — the biggest remaining block |
+| 5. CI/CD and publishing | **done** — CI + tag-driven release to Docker Hub |
 | 6. Removing internal references | **done** |
 | 7. Code findings | **partly done** — the rest are small, individually |
 
@@ -35,23 +35,19 @@ Last reviewed: 2026-08-11, against the working tree — not from memory.
 
 Ordered by what would hurt most if it shipped without them.
 
-### 5. CI/CD and publishing
+### 5. Before the first tag
 
-Decided: GitHub Actions + Docker Hub. Nothing built yet — there is no `.github/` at all.
+CI and the release workflow are in place. What is left is external to the repository:
 
-- [ ] **CI workflow**: `fmt-check`, `vet`, `test` on pull requests. `make ci` already runs
-      exactly this, so the workflow is thin. The test suite stands up real `nats-server`
-      instances in-process, which needs no extra services but does take ~15s.
-- [ ] **Release workflow**: build and push the image on a tag.
-- [ ] **Versioning**: no tags, no `CHANGELOG.md`. Nobody can depend on this without them.
-- [ ] **Decide the image name** and who owns the Docker Hub namespace.
+- [ ] **Create the Docker Hub secrets** on the GitHub repository: `DOCKERHUB_USERNAME` and
+      `DOCKERHUB_TOKEN` (an access token with write scope, not an account password). The release
+      workflow cannot publish without them.
+- [ ] **Confirm `security@grava.digital`** exists and is monitored, or replace it in
+      `SECURITY.md`. A reporting address that bounces is worse than none.
+- [ ] **Tag `v0.1.0`** once the items below are settled. That is what publishes the first image.
 
 ### OSS repository basics
 
-None of these exist, and the first one matters more than the rest for a component that decides
-who gets into a message bus.
-
-- [ ] **`SECURITY.md`** — how to report a vulnerability privately.
 - [ ] `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, issue/PR templates.
 - [ ] **`docker-compose.yml`** — the shortest path from clone to something running. Today
       `make run` needs Go, `nsc` and `nats-server` installed locally.

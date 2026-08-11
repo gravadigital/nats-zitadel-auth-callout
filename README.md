@@ -318,6 +318,50 @@ The bootstrap is **idempotent**: if there is already an identity in `nats/out/`,
 Regenerating it breaks the server's trust and forces reissuing every cred
 (`make clean-identity`).
 
+### The container image
+
+```sh
+docker pull gravadigital/nats-zitadel-auth-callout:0.1.0
+```
+
+Tags are `MAJOR.MINOR.PATCH`, plus a rolling `MAJOR.MINOR` for taking patch releases without
+minor ones, plus `latest` on the newest stable release. A prerelease (`v1.0.0-rc.1`) publishes
+only its own tag and never moves `latest`.
+
+The image carries no configuration and no secrets. Mount them:
+
+```sh
+docker run --rm \
+  -v "$PWD/examples:/etc/auth-callout:ro" \
+  -v "$PWD/nats/out:/etc/nats-creds:ro" \
+  -e CALLOUT_CONFIG_FILE=/etc/auth-callout/operator-mode/callout.yaml \
+  -e CALLOUT_HANDLER_CREDS=/etc/nats-creds/sentinel-handler.creds \
+  -e CALLOUT_APP_ACCOUNT_SK_SEED=/etc/nats-creds/app-account.sk.seed \
+  -e CALLOUT_AUTH_ACCOUNT_SK_SEED=/etc/nats-creds/auth-account.sk.seed \
+  -e CALLOUT_XKEY_SEED=/etc/nats-creds/callout-xkey.seed \
+  gravadigital/nats-zitadel-auth-callout:0.1.0
+```
+
+`docker run --rm gravadigital/nats-zitadel-auth-callout:0.1.0 version` reports which build it is.
+The service also logs it on its first line.
+
+### Cutting a release
+
+Releases come from tags, never from merges to `main`, so `latest` only moves when somebody
+decides it should:
+
+```sh
+# update CHANGELOG.md, then:
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
+```
+
+That runs the full gate again against the tagged commit, builds the image with the version baked
+in, publishes it, and then pulls it back to confirm it runs and reports the right version.
+
+Publishing needs two repository secrets: `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` — an access
+token from Docker Hub with write scope, not an account password.
+
 ### Trying it by hand
 
 The default mode is `mock`: an in-process IdP that decodes the identity from the token text,
