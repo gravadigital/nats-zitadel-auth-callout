@@ -39,11 +39,8 @@ Ordered by what would hurt most if it shipped without them.
 
 CI and the release workflow are in place. What is left is external to the repository:
 
-- [ ] **Create the Docker Hub secrets** on the GitHub repository: `DOCKERHUB_USERNAME` and
-      `DOCKERHUB_TOKEN` (an access token with write scope, not an account password). The release
-      workflow cannot publish without them.
-- [ ] **Confirm `security@grava.digital`** exists and is monitored, or replace it in
-      `SECURITY.md`. A reporting address that bounces is worse than none.
+- [x] **Docker Hub secrets** created on the GitHub repository.
+- [x] **Reporting address** confirmed: `info@grava.digital`.
 - [ ] **Tag `v0.1.0`** once the items below are settled. That is what publishes the first image.
 
 ### OSS repository basics

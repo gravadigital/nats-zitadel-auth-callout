@@ -6,12 +6,8 @@
 
 > [Report a vulnerability](https://github.com/gravadigital/nats-zitadel-auth-callout/security/advisories/new)
 
-If that is not available to you, email **security@grava.digital** with `nats-zitadel-auth-callout`
+If that is not available to you, email **info@grava.digital** with `nats-zitadel-auth-callout`
 in the subject.
-
-<!-- TODO before publishing: confirm security@grava.digital exists and is monitored, or replace
-     it. A reporting address that bounces is worse than none, because it looks like a channel. -->
-
 
 Useful things to include, as far as you have them: what an attacker gains, the server mode
 (`operator` or `config`), the identity provider, and a `rules.yaml` plus template that reproduces
