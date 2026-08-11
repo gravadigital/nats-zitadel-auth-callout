@@ -168,12 +168,21 @@ func NewZitadel(ctx context.Context, issuerURL string, opts ...ZitadelOption) (*
 
 // discoverJWKS resolves jwks_uri through the OpenID Connect well-known document.
 func (z *Zitadel) discoverJWKS(ctx context.Context) (string, error) {
-	url := z.issuer + "/.well-known/openid-configuration"
+	return discoverJWKSURL(ctx, z.httpClient, z.issuer, &z.issuer)
+}
+
+// discoverJWKSURL resolves jwks_uri through the OpenID Connect well-known document.
+//
+// issuerOut, when non-nil, receives the issuer the document DECLARES. That value wins over the
+// URL used to reach it: tokens are validated against the declared issuer, and the two legimately
+// differ behind a proxy or on an internal host.
+func discoverJWKSURL(ctx context.Context, client *http.Client, issuerURL string, issuerOut *string) (string, error) {
+	url := strings.TrimSuffix(issuerURL, "/") + "/.well-known/openid-configuration"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("idp: build discovery request: %w", err)
 	}
-	resp, err := z.httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("idp: OIDC discovery at %q: %w", url, err)
 	}
@@ -193,10 +202,8 @@ func (z *Zitadel) discoverJWKS(ctx context.Context) (string, error) {
 	if doc.JWKSURI == "" {
 		return "", fmt.Errorf("idp: the discovery document at %q carries no jwks_uri", url)
 	}
-	// The declared issuer wins: tokens are validated against that value, and it may differ
-	// from the URL used to reach it (proxies, internal hosts).
-	if doc.Issuer != "" {
-		z.issuer = strings.TrimSuffix(doc.Issuer, "/")
+	if doc.Issuer != "" && issuerOut != nil {
+		*issuerOut = strings.TrimSuffix(doc.Issuer, "/")
 	}
 	return doc.JWKSURI, nil
 }
@@ -239,6 +246,9 @@ func (z *Zitadel) VerifyToken(ctx context.Context, token string) (*Claims, error
 		Subject:   subject,
 		ExpiresAt: parsed.Expiration(),
 		Roles:     extractRoles(parsed, z.projectID),
+		// Raw carries the private claims so deployment-declared placeholders can be read from
+		// them. Only the claims declared in rules.yaml are ever looked up.
+		Raw: parsed.PrivateClaims(),
 	}
 
 	if username, ok := stringClaim(parsed, claimPreferredUsername); ok {

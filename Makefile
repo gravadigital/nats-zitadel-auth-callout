@@ -28,7 +28,7 @@ build: ## Compile the binary into bin/callout
 	go build -o bin/callout ./cmd/callout
 
 .PHONY: test
-test: ## Unit tests (includes validating the shippable config)
+test: ## Tests. Includes both server modes against an in-process nats-server
 	go test ./...
 
 .PHONY: test-live
@@ -39,10 +39,6 @@ test-live: ## Verify connectivity with real Zitadel (needs CALLOUT_ZITADEL_ISSUE
 	fi; \
 	go test -tags live -count=1 -v -run TestLive ./internal/idp/
 
-.PHONY: test-e2e
-test-e2e: ## Acceptance suite: brings up NATS + callout and exercises the real flows
-	go test -tags e2e -count=1 -timeout 180s ./test/e2e/...
-
 .PHONY: fmt
 fmt: ## Format
 	gofmt -w $(shell find . -name '*.go' -not -path './vendor/*')
@@ -52,7 +48,7 @@ vet: ## go vet
 	go vet ./...
 
 .PHONY: ci
-ci: fmt-check vet test test-e2e ## Everything CI runs
+ci: fmt-check vet test ## Everything CI runs
 
 .PHONY: fmt-check
 fmt-check: ## Fail if anything is unformatted

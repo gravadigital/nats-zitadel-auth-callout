@@ -126,7 +126,7 @@ rules:
 		t.Fatalf("NewRouterFromFile: %v", err)
 	}
 
-	_, _, _, err = router.Resolve([]string{"another-role"}, "sub-1", "whoever")
+	_, _, _, err = router.Resolve([]string{"another-role"}, "sub-1", "whoever", nil)
 	if !errors.Is(err, ErrNoRuleMatched) {
 		t.Fatalf("expected ErrNoRuleMatched, got %v", err)
 	}
@@ -146,7 +146,7 @@ rules:
 		t.Fatalf("NewRouterFromFile: %v", err)
 	}
 
-	id, perms, _, err := router.Resolve([]string{"user"}, "zitadel-user-123", "ana@grava.io")
+	id, perms, _, err := router.Resolve([]string{"user"}, "zitadel-user-123", "ana@example.com", nil)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -167,7 +167,7 @@ rules:
 	if !slices.Contains(perms.SubAllow, wantInbox) {
 		t.Fatalf("expected the inbox %q, got %v", wantInbox, perms.SubAllow)
 	}
-	if id.Username != "ana@grava.io" {
+	if id.Username != "ana@example.com" {
 		t.Fatalf("expected the token username, got %q", id.Username)
 	}
 }
@@ -187,7 +187,7 @@ rules:
 		t.Fatalf("NewRouterFromFile: %v", err)
 	}
 
-	id, perms, _, err := router.Resolve([]string{"svc-jira"}, "machine-user-9", "")
+	id, perms, _, err := router.Resolve([]string{"svc-jira"}, "machine-user-9", "", nil)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -224,7 +224,7 @@ rules:
 	}
 
 	// The `sub` belongs to a Zitadel machine user; the rule says person.
-	id, _, decision, err := router.Resolve([]string{"poc-user"}, "385270818583609346", "poc_user")
+	id, _, decision, err := router.Resolve([]string{"poc-user"}, "100000000000000001", "poc_user", nil)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -232,7 +232,7 @@ rules:
 	if decision.IdentityModel != UserTypePerson || id.Type != UserTypePerson {
 		t.Fatalf("expected the person model, got decision=%q identity=%q", decision.IdentityModel, id.Type)
 	}
-	if id.UserID != "385270818583609346" {
+	if id.UserID != "100000000000000001" {
 		t.Fatalf("the user id must be the token sub, got %q", id.UserID)
 	}
 	if id.Service != "" {
@@ -269,9 +269,9 @@ func TestHashUserIDIsStableAndDistinct(t *testing.T) {
 // The inbox does NOT use the raw user id: a Zitadel `sub` may carry characters that are not
 // a valid subject token, and the prefix has to be fixed-length.
 func TestInboxPrefixUsesHashNotRawUserID(t *testing.T) {
-	id := Identity{Instance: "prod", UserID: "385270818583609346"}
+	id := Identity{Instance: "prod", UserID: "100000000000000001"}
 
-	want := "_INBOX." + HashUserID("385270818583609346")
+	want := "_INBOX." + HashUserID("100000000000000001")
 	if got := id.InboxPrefix(); got != want {
 		t.Fatalf("expected %q, got %q", want, got)
 	}
@@ -398,7 +398,7 @@ func TestShippedConfigIsValid(t *testing.T) {
 		{"poc-admin"}, {"poc-user"}, {"poc-service"},
 	} {
 		t.Run(roles[0], func(t *testing.T) {
-			id, perms, decision, err := router.Resolve(roles, "test-sub", "test")
+			id, perms, decision, err := router.Resolve(roles, "test-sub", "test", nil)
 			if err != nil {
 				t.Fatalf("Resolve(%v): %v", roles, err)
 			}
@@ -444,7 +444,7 @@ func TestEveryKVBucketHasExactlyOneManager(t *testing.T) {
 
 	for _, rule := range cfg.Rules {
 		path := filepath.Join(filepath.Dir(rulesPath), rule.Template)
-		tmpl, err := LoadTemplate(path)
+		tmpl, err := LoadTemplate(path, probeIdentity())
 		if err != nil {
 			t.Fatalf("LoadTemplate(%s): %v", path, err)
 		}
@@ -486,7 +486,7 @@ func TestPersonTemplatesPublishOnlyUnderOwnUserID(t *testing.T) {
 	}
 
 	for _, role := range []string{"poc-admin", "poc-user"} {
-		id, perms, decision, err := router.Resolve([]string{role}, "sub-"+role, role)
+		id, perms, decision, err := router.Resolve([]string{role}, "sub-"+role, role, nil)
 		if err != nil {
 			t.Fatalf("Resolve(%s): %v", role, err)
 		}
@@ -521,7 +521,7 @@ func TestShippedConfigRejectsUnknownRole(t *testing.T) {
 	}
 
 	for _, roles := range [][]string{nil, {"nonexistent-role"}, {"ad-admin", "vd-user"}} {
-		if _, _, _, err := router.Resolve(roles, "sub-x", "x"); !errors.Is(err, ErrNoRuleMatched) {
+		if _, _, _, err := router.Resolve(roles, "sub-x", "x", nil); !errors.Is(err, ErrNoRuleMatched) {
 			t.Fatalf("Resolve(%v): expected ErrNoRuleMatched, got %v", roles, err)
 		}
 	}

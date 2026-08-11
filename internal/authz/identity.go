@@ -55,6 +55,51 @@ type Identity struct {
 	// into the User JWT's Name field, which is what shows up in
 	// `nats server report connections`.
 	Username string
+
+	// Extra holds deployment-defined placeholders, read from token claims as declared in
+	// rules.yaml (`placeholders:`).
+	//
+	// This is what lets the service adopt a subject grammar it did not design. The built-in
+	// placeholders describe THIS project's grammar
+	// (`<instance>.<user-id>.<service>.<method>`); another deployment's may be tenant-first,
+	// region-scoped or something else entirely, and no fixed set of built-ins covers that.
+	// Claims are the only place such a value can come from and still be vouched for by the
+	// IdP.
+	//
+	// A built-in name cannot be overridden: allowing `user_id` to be redefined from an
+	// arbitrary claim would let a template mint permissions for a different identity than the
+	// one that authenticated.
+	Extra map[string]string
+
+	// InboxMode selects how InboxPrefix and {{user_id_hash}} behave. Empty means hashed.
+	InboxMode InboxMode
+}
+
+// InboxMode selects how a connection's private inbox is derived.
+type InboxMode string
+
+const (
+	// InboxHashed scopes the inbox to `_INBOX.<hash(user-id)>`, isolating replies per user at
+	// the cost of every client having to set that prefix.
+	InboxHashed InboxMode = "hashed"
+	// InboxPassthrough leaves the inbox alone, for an existing NATS whose clients cannot be
+	// changed. The template then has to grant a broader inbox, which is less isolated.
+	InboxPassthrough InboxMode = "passthrough"
+)
+
+// builtinPlaceholders are the names a deployment may not redefine, because each is derived
+// from the authenticated identity rather than from arbitrary token content.
+var builtinPlaceholders = map[string]struct{}{
+	"instance":     {},
+	"user_id":      {},
+	"user_id_hash": {},
+	"service":      {},
+}
+
+// IsBuiltinPlaceholder reports whether name is reserved.
+func IsBuiltinPlaceholder(name string) bool {
+	_, ok := builtinPlaceholders[name]
+	return ok
 }
 
 // placeholders exposes the identity as the map templates consume.
@@ -65,12 +110,27 @@ type Identity struct {
 // `user_id_hash` is exposed pre-computed so a template can write the inbox as
 // `_INBOX.{{user_id_hash}}.>` without knowing how it is derived.
 func (id Identity) placeholders() map[string]string {
-	return map[string]string{
-		"instance":     id.Instance,
-		"user_id":      id.UserID,
-		"user_id_hash": HashUserID(id.UserID),
-		"service":      id.Service,
+	vars := map[string]string{
+		"instance": id.Instance,
+		"user_id":  id.UserID,
+		"service":  id.Service,
 	}
+	// In passthrough mode there is no per-user inbox, so `user_id_hash` is deliberately NOT
+	// exposed: a template minting `_INBOX.{{user_id_hash}}.>` would grant a permission for an
+	// inbox no client ever uses, and the symptom — replies never arriving — says nothing about
+	// the cause. Leaving it undefined turns that into an ErrUnknownPlaceholder at startup.
+	if id.InboxMode != InboxPassthrough {
+		vars["user_id_hash"] = HashUserID(id.UserID)
+	}
+	// Deployment-defined placeholders are added second but cannot shadow a built-in: the
+	// loader rejects those names, so this loop only ever adds new keys.
+	for name, value := range id.Extra {
+		if IsBuiltinPlaceholder(name) {
+			continue
+		}
+		vars[name] = value
+	}
+	return vars
 }
 
 // InboxPrefix is the private inbox prefix belonging to this identity:
@@ -84,7 +144,12 @@ func (id Identity) placeholders() map[string]string {
 // That is why the hash is deterministic: the client recomputes it from its own token, with
 // no side channel. Each connection adds its own unique token under the prefix, so two
 // connections from the same user do not cross.
+// In passthrough mode there is no per-user prefix: the standard `_INBOX` is returned and the
+// template is responsible for granting whatever inbox its clients actually use.
 func (id Identity) InboxPrefix() string {
+	if id.InboxMode == InboxPassthrough {
+		return "_INBOX"
+	}
 	return "_INBOX." + HashUserID(id.UserID)
 }
 

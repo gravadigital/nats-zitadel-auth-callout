@@ -371,13 +371,13 @@ func TestLoadTemplateRejectsBadPlaceholderAtLoad(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	if _, err := LoadTemplate(path); !errors.Is(err, ErrUnknownPlaceholder) {
+	if _, err := LoadTemplate(path, probeIdentity()); !errors.Is(err, ErrUnknownPlaceholder) {
 		t.Fatalf("expected ErrUnknownPlaceholder at load time, got %v", err)
 	}
 }
 
 func TestLoadTemplateMissingFile(t *testing.T) {
-	if _, err := LoadTemplate(filepath.Join(t.TempDir(), "does-not-exist.yaml")); err == nil {
+	if _, err := LoadTemplate(filepath.Join(t.TempDir(), "does-not-exist.yaml"), probeIdentity()); err == nil {
 		t.Fatal("expected an error for a non-existent file")
 	}
 }
@@ -395,4 +395,10 @@ func assertSubjects(t *testing.T, label string, got, want []string) {
 			t.Fatalf("%s: missing %q in %v", label, w, got)
 		}
 	}
+}
+
+// probeIdentity is the identity template validation runs against in tests. It mirrors what
+// Router.probeIdentity produces for a deployment declaring no extra placeholders.
+func probeIdentity() Identity {
+	return Identity{Instance: "probe", UserID: "probe", Service: "probe"}
 }

@@ -2,17 +2,29 @@
 //
 // The exchange, end to end:
 //
-//  1. The client connects with the sentinel-client creds (which grant no permissions of
-//     their own) and passes its Zitadel access token in the CONNECT Token field.
+//  1. The client connects with the sentinel-client credentials (which grant no permissions of
+//     their own) and passes its access token in the CONNECT Token field.
 //  2. Because the sentinel-client is NOT declared in --auth-user, the server does not
 //     authorize it by itself: it publishes a request on $SYS.REQ.USER.AUTH of the AUTH
 //     account.
 //  3. This service handles it: it decrypts (XKey), decodes the authorization_request,
-//     validates the token against Zitadel, routes role -> template, and expands the
-//     permissions.
-//  4. It answers with an authorization_response containing a freshly signed User JWT, signed
-//     with the APP account's signing key, carrying those permissions and the token's expiry.
+//     validates the token against the identity provider, routes role -> template, and expands
+//     the permissions.
+//  4. It answers with an authorization_response containing a freshly signed User JWT carrying
+//     those permissions and the token's expiry.
 //  5. The server accepts the connection with exactly those permissions.
+//
+// # Server modes
+//
+// The service works against both NATS authorization models (see Mode). The protocol above is
+// identical in both; they differ only in how the minted User JWT names the account the
+// connection lands in:
+//
+//	operator   IssuerAccount = APP account PUBKEY, signed by an APP account signing key
+//	config     Audience      = target account NAME, signed by the `auth_callout.issuer` key
+//
+// Sending the wrong one is not a subtle failure: a config-mode server rejects any User JWT
+// carrying issuer_account outright.
 package callout
 
 import (
@@ -34,6 +46,32 @@ import (
 // served inside the AUTH account, with the sentinel-handler creds.
 const AuthSubject = "$SYS.REQ.USER.AUTH"
 
+// Mode is the authorization mode of the NATS server the callout serves. It is the one thing
+// about the server that cannot be inferred safely, so it is declared.
+//
+// The two modes differ in exactly one respect that reaches this package: HOW the User JWT
+// names the account the connection lands in. Everything else — the callout protocol, the
+// XKey, token verification, role routing, template expansion — is identical.
+type Mode string
+
+const (
+	// ModeOperator is a server whose authorization comes from operator-signed account JWTs
+	// (`nsc edit authcallout`). The User JWT is signed with an APP account signing key and
+	// carries the APP account pubkey in IssuerAccount; that claim is what binds the user to
+	// the account.
+	ModeOperator Mode = "operator"
+	// ModeConfig is a server whose authorization lives in `nats-server.conf`
+	// (`authorization { auth_callout { ... } }`). There are no account JWTs, so IssuerAccount
+	// does not apply — the server REJECTS a User JWT that carries it. The target account
+	// travels in the Audience claim instead, as an account NAME.
+	ModeConfig Mode = "config"
+)
+
+// IsValid reports whether m is a known mode.
+func (m Mode) IsValid() bool {
+	return m == ModeOperator || m == ModeConfig
+}
+
 // ServerXKeyHeader is the header carrying the server's ephemeral public XKey. Its presence
 // signals that the request is encrypted and that the response must be encrypted toward it.
 const ServerXKeyHeader = "Nats-Server-Xkey"
@@ -52,16 +90,35 @@ type Service struct {
 	router   *authz.Router
 	log      *zerolog.Logger
 
-	// signingKey signs the User JWT. It is a signing key of the APP account: it is what makes
-	// the user land in that account.
+	// mode is the server's authorization mode. It decides how the User JWT names the target
+	// account.
+	mode Mode
+
+	// signingKey signs the User JWT.
+	//
+	// In operator mode it is a signing key of the APP account: it is what makes the user land
+	// in that account. In config mode it is the key whose pubkey the server declares in
+	// `auth_callout.issuer` — the server compares the User JWT's issuer against it.
 	signingKey nkeys.KeyPair
-	// issuerAccount is the APP account's public key. It goes into the User JWT's
-	// IssuerAccount claim, which is how the server knows which account a JWT signed with a
-	// signing key rather than the account key belongs to.
+	// issuerAccount is the APP account's public key, used ONLY in operator mode. It goes into
+	// the User JWT's IssuerAccount claim, which is how the server knows which account a JWT
+	// signed with a signing key rather than the account key belongs to.
+	//
+	// In config mode it MUST stay empty: the server rejects a User JWT carrying issuer_account
+	// when there is no operator ("attempted to use issuer_account").
 	issuerAccount string
-	// responseSigner signs the authorization_response. It is a signing key of the AUTH
-	// account — the one the server has configured as the callout's issuer. It is a DIFFERENT
-	// key from signingKey: one vouches for the response, the other creates the user.
+	// targetAccount is the account NAME connections land in, used ONLY in config mode. It
+	// travels in the User JWT's Audience claim, which is what the server looks up to place the
+	// connection.
+	targetAccount string
+	// responseSigner signs the authorization_response.
+	//
+	// In operator mode it is a signing key of the AUTH account — a DIFFERENT key from
+	// signingKey: one vouches for the response, the other creates the user.
+	//
+	// In config mode there is only one key, so this is the same key as signingKey. The server
+	// only verifies the response's signer when the response is NOT encrypted; with an XKey
+	// configured (the recommended setup) it skips that check and relies on the encryption.
 	responseSigner nkeys.KeyPair
 	// xkey is the callout's curve25519 pair. It decrypts requests and encrypts responses. Its
 	// public half is the one passed to `nsc edit authcallout --curve`.
@@ -72,12 +129,25 @@ type Service struct {
 
 // Config holds the Service's dependencies.
 type Config struct {
-	Conn           *nats.Conn
-	Verifier       idp.Verifier
-	Router         *authz.Router
-	Logger         *zerolog.Logger
-	SigningKey     nkeys.KeyPair
-	IssuerAccount  string
+	Conn     *nats.Conn
+	Verifier idp.Verifier
+	Router   *authz.Router
+	Logger   *zerolog.Logger
+
+	// Mode is the server's authorization mode. Empty defaults to ModeOperator, which keeps
+	// existing deployments working unchanged.
+	Mode Mode
+
+	// SigningKey signs the User JWT. Required in both modes.
+	SigningKey nkeys.KeyPair
+	// IssuerAccount is the APP account pubkey. Required in operator mode, must be empty in
+	// config mode.
+	IssuerAccount string
+	// TargetAccount is the account name connections land in. Required in config mode, must be
+	// empty in operator mode.
+	TargetAccount string
+	// ResponseSigner signs the authorization_response. Required in operator mode; in config
+	// mode it defaults to SigningKey when omitted.
 	ResponseSigner nkeys.KeyPair
 	XKey           nkeys.KeyPair
 }
@@ -85,6 +155,18 @@ type Config struct {
 // New builds the service. It validates the dependencies up front: otherwise each of these
 // omissions would produce a per-request failure rather than a startup one.
 func New(cfg Config) (*Service, error) {
+	mode := cfg.Mode
+	if mode == "" {
+		// Defaulting to operator keeps every existing deployment working without touching its
+		// configuration. The mode is never inferred from which keys are present: guessing it
+		// would turn a misconfiguration into a silently different authorization model.
+		mode = ModeOperator
+	}
+	if !mode.IsValid() {
+		return nil, fmt.Errorf("callout: invalid mode %q (expected %s or %s)",
+			mode, ModeOperator, ModeConfig)
+	}
+
 	switch {
 	case cfg.Conn == nil:
 		return nil, errors.New("callout: missing the NATS connection")
@@ -93,11 +175,39 @@ func New(cfg Config) (*Service, error) {
 	case cfg.Router == nil:
 		return nil, errors.New("callout: missing the permission router")
 	case cfg.SigningKey == nil:
-		return nil, errors.New("callout: missing the APP account signing key")
-	case cfg.IssuerAccount == "":
-		return nil, errors.New("callout: missing the APP account public key (issuer account)")
-	case cfg.ResponseSigner == nil:
-		return nil, errors.New("callout: missing the AUTH account signing key (response signer)")
+		return nil, errors.New("callout: missing the User JWT signing key")
+	}
+
+	responseSigner := cfg.ResponseSigner
+
+	// The per-mode checks reject the CROSS-mode value instead of ignoring it. A config-mode
+	// deploy that still carries an issuer account is either a half-finished migration or a
+	// misunderstanding of the mode; both are worth failing at startup, because the alternative
+	// is a server rejecting every connection with an error that names a claim the operator
+	// never knowingly set.
+	switch mode {
+	case ModeOperator:
+		if cfg.IssuerAccount == "" {
+			return nil, errors.New("callout: operator mode needs the APP account public key (issuer account)")
+		}
+		if cfg.TargetAccount != "" {
+			return nil, errors.New("callout: operator mode does not use a target account name (the account comes from the issuer account pubkey)")
+		}
+		if responseSigner == nil {
+			return nil, errors.New("callout: operator mode needs the AUTH account signing key (response signer)")
+		}
+	case ModeConfig:
+		if cfg.TargetAccount == "" {
+			return nil, errors.New("callout: config mode needs the target account name (it travels in the User JWT audience)")
+		}
+		if cfg.IssuerAccount != "" {
+			return nil, errors.New("callout: config mode must not set an issuer account (the server rejects a User JWT carrying issuer_account when there is no operator)")
+		}
+		if responseSigner == nil {
+			// In config mode a single key signs both the User JWT and the response: the one the
+			// server declares in `auth_callout.issuer`.
+			responseSigner = cfg.SigningKey
+		}
 	}
 
 	log := cfg.Logger
@@ -111,12 +221,17 @@ func New(cfg Config) (*Service, error) {
 		verifier:       cfg.Verifier,
 		router:         cfg.Router,
 		log:            log,
+		mode:           mode,
 		signingKey:     cfg.SigningKey,
 		issuerAccount:  cfg.IssuerAccount,
-		responseSigner: cfg.ResponseSigner,
+		targetAccount:  cfg.TargetAccount,
+		responseSigner: responseSigner,
 		xkey:           cfg.XKey,
 	}, nil
 }
+
+// Mode reports the mode the service was built for.
+func (s *Service) Mode() Mode { return s.mode }
 
 // Start subscribes to the auth callout subject and begins serving.
 func (s *Service) Start() error {
@@ -195,7 +310,12 @@ func (s *Service) handle(msg *nats.Msg) {
 		return
 	}
 
-	identity, perms, decision, err := s.router.Resolve(claims.Roles, claims.Subject, claims.Username)
+	// Deployment-declared placeholders are read from the token's claims. A missing one is a
+	// rejection, handled inside Resolve: minting a subject with an empty segment would grant
+	// permissions that silently match nothing.
+	extra := s.extraPlaceholders(claims)
+
+	identity, perms, decision, err := s.router.Resolve(claims.Roles, claims.Subject, claims.Username, extra)
 	if err != nil {
 		s.log.Warn().
 			Err(err).
@@ -241,6 +361,24 @@ func (s *Service) handle(msg *nats.Msg) {
 		Msg("authenticated")
 }
 
+// extraPlaceholders reads the values of the deployment-declared placeholders from the token.
+//
+// It returns nil when nothing is declared, which is the common case and keeps the hot path
+// free of allocation.
+func (s *Service) extraPlaceholders(claims *idp.Claims) map[string]string {
+	declared := s.router.Placeholders()
+	if len(declared) == 0 {
+		return nil
+	}
+	extra := make(map[string]string, len(declared))
+	for name, claimPath := range declared {
+		if value, ok := claims.ClaimString(claimPath); ok {
+			extra[name] = value
+		}
+	}
+	return extra
+}
+
 // mintUserJWT assembles and signs the User JWT with the already-expanded permissions.
 func (s *Service) mintUserJWT(
 	userNkey string,
@@ -261,9 +399,26 @@ func (s *Service) mintUserJWT(
 		// less pretty in `nats server report connections`, but it identifies just as well.
 		claims.Name = identity.UserID
 	}
-	// IssuerAccount is mandatory when signing with a signing key: without it the server
-	// cannot know which account the user belongs to.
-	claims.IssuerAccount = s.issuerAccount
+	// How the User JWT names the account is the ONE thing that differs between the two modes.
+	//
+	// Beware of the two Audience fields, which mean opposite things and are easy to confuse:
+	//   - the INNER User JWT's Audience (here) is the target ACCOUNT NAME, in config mode;
+	//   - the OUTER authorization_response's Audience is the SERVER ID (see respondJWT).
+	// ADR-26 documents `aud` as the server key, which is true only of the outer claim.
+	switch s.mode {
+	case ModeOperator:
+		// IssuerAccount is mandatory when signing with a signing key: without it the server
+		// cannot know which account the user belongs to.
+		claims.IssuerAccount = s.issuerAccount
+	case ModeConfig:
+		// There are no account JWTs, so the account is named by NAME, not by pubkey: the server
+		// resolves it with a name lookup. Using the pubkey here fails with "no valid account"
+		// even though the key is correct.
+		//
+		// IssuerAccount is deliberately left unset: a config-mode server rejects a User JWT
+		// that carries it.
+		claims.Audience = s.targetAccount
+	}
 
 	claims.Pub.Allow = perms.PubAllow
 	claims.Pub.Deny = perms.PubDeny

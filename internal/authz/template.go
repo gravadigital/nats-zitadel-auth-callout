@@ -17,8 +17,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 // Template errors.
@@ -31,6 +29,10 @@ var (
 	ErrInvalidKVAccess = errors.New("authz: invalid KV access level")
 	// ErrEmptyBucket flags a KV entry with no bucket.
 	ErrEmptyBucket = errors.New("authz: missing bucket in kv entry")
+	// ErrEmptyPermissions flags a template that grants nothing at all. A client using it would
+	// authenticate successfully and then have every operation denied, which looks like a broken
+	// service rather than a misconfigured template.
+	ErrEmptyPermissions = errors.New("authz: template grants no permissions")
 )
 
 // placeholderRE captures {{name}} with optional spaces: {{ session }} works too.
@@ -66,6 +68,9 @@ type Template struct {
 	// concrete $KV.*/$JS.API.* subjects and appends them to Pub/Sub — that way a template
 	// does not have to know the JetStream protocol.
 	KV []KVAccess `yaml:"kv"`
+	// referenced holds the placeholder names the template's source mentions. It is filled by
+	// LoadTemplate and used to report a declared placeholder no template ever uses.
+	referenced map[string]struct{}
 	// Response controls allow_responses: it enables replying to the caller's inbox without
 	// an explicit pub permission toward that inbox. It is what a service needs in order to
 	// answer requests.
@@ -116,25 +121,62 @@ type Permissions struct {
 	RespTTL time.Duration
 }
 
-// LoadTemplate reads and parses a template, and validates that it expands cleanly. The
-// validation happens here, at startup, against a probe identity: a mistyped placeholder or
-// an invalid subject breaks startup instead of emitting a broken JWT in production.
-func LoadTemplate(path string) (*Template, error) {
+// LoadTemplate reads and parses a template, and validates that it expands cleanly against
+// probe. The validation happens here, at startup: a mistyped placeholder or an invalid subject
+// breaks startup instead of emitting a broken JWT in production.
+//
+// The probe identity comes from the Router, so it carries exactly the placeholders this
+// deployment declared — which is what makes "unknown placeholder" a startup error even for
+// deployment-defined names.
+func LoadTemplate(path string, probe Identity) (*Template, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("authz: read template %q: %w", path, err)
 	}
 	var t Template
-	if err := yaml.Unmarshal(data, &t); err != nil {
+	// Strict: an unknown key is a typo, and a silently ignored `publish:` would grant nothing
+	// while still starting. See decodeStrict.
+	if err := decodeStrict(data, &t); err != nil {
 		return nil, fmt.Errorf("authz: parse template %q: %w", path, err)
 	}
 	// Expansion dry run: catches unknown placeholders, empty buckets, invalid access levels
 	// and malformed subjects before serving any traffic.
-	probe := Identity{Instance: "probe", UserID: "probe", Service: "probe"}
-	if _, err := t.Expand(probe); err != nil {
+	perms, err := t.Expand(probe)
+	if err != nil {
 		return nil, fmt.Errorf("authz: validate template %q: %w", path, err)
 	}
+	// A template that grants nothing produces a connection that authenticates and can then do
+	// nothing at all — every publish and subscribe denied, with no error at connect time. There
+	// is no configuration for which that is the intent, so it fails here.
+	//
+	// Deny-only counts as granting nothing: with no allow, the denies have nothing to trim.
+	if len(perms.PubAllow) == 0 && len(perms.SubAllow) == 0 {
+		return nil, fmt.Errorf("%w: %q grants no pub.allow and no sub.allow, so a client using it would authenticate and then be denied everything",
+			ErrEmptyPermissions, path)
+	}
+	t.referenced = referencedPlaceholders(data)
 	return &t, nil
+}
+
+// referencedPlaceholders collects the {{...}} names the template's source mentions.
+//
+// It reads the raw bytes rather than walking the parsed struct because every field that can
+// carry a placeholder is a string somewhere in the tree, and a scan cannot go stale when a new
+// one is added. The result feeds the "declared but never used" check, which is advisory about
+// configuration rather than about any single subject, so over-collecting is harmless and
+// missing a reference is not.
+func referencedPlaceholders(data []byte) map[string]struct{} {
+	found := make(map[string]struct{})
+	for _, match := range placeholderRE.FindAllSubmatch(data, -1) {
+		found[string(match[1])] = struct{}{}
+	}
+	return found
+}
+
+// References reports whether the template mentions the given placeholder.
+func (t *Template) References(name string) bool {
+	_, ok := t.referenced[name]
+	return ok
 }
 
 // Expand resolves the template against a concrete identity and returns the final
@@ -334,6 +376,17 @@ func expandOne(s string, vars map[string]string) (string, error) {
 		return value
 	})
 	if len(missing) > 0 {
+		// `user_id_hash` gets its own message: it is a real placeholder that this INBOX MODE
+		// withholds, so "unknown placeholder" would send the reader looking for a typo.
+		for _, name := range missing {
+			if name == "user_id_hash" {
+				return "", fmt.Errorf("%w: %q is not available with CALLOUT_INBOX_MODE=passthrough (in %q). "+
+					"In passthrough mode clients keep their default inbox, so a permission scoped to the hash would "+
+					"grant an inbox nobody uses; grant the inbox the clients actually use (e.g. `_INBOX.>`) or switch "+
+					"to CALLOUT_INBOX_MODE=hashed",
+					ErrUnknownPlaceholder, name, s)
+			}
+		}
 		return "", fmt.Errorf("%w: %s (in %q; available: %s)",
 			ErrUnknownPlaceholder, strings.Join(missing, ", "), s, availablePlaceholders(vars))
 	}
