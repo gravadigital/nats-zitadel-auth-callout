@@ -9,6 +9,15 @@ under **Changed** with what a deployment has to do.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-11
+
+### Added
+
+- The release workflow now writes the **Docker Hub repository overview** and short description
+  from `docs/docker-hub.md`, so the image page describes what it is and links back to the source.
+  Docker Hub's own source-repository linking is a paid feature tied to Automated Builds, which is
+  deprecated for retirement in April 2027, so the description API is the supported path.
+
 ## [0.1.0] - 2026-08-11
 
 First public release.
@@ -49,5 +58,6 @@ First public release.
   what the template describes — a `tenant` claim of `*` reaching every tenant, and in `kv.bucket`
   every KV bucket in the account. The same validation applies to the token's `sub`.
 
-[Unreleased]: https://github.com/gravadigital/nats-zitadel-auth-callout/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/gravadigital/nats-zitadel-auth-callout/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/gravadigital/nats-zitadel-auth-callout/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/gravadigital/nats-zitadel-auth-callout/releases/tag/v0.1.0
