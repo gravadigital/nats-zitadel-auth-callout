@@ -85,26 +85,19 @@ jobs:
             *) echo "::error::the image reports '$got', which does not carry ${GITHUB_REF_NAME}"; exit 1 ;;
           esac
 
-      # Docker Hub shows nothing on a repository page unless something puts it there. Linking a
-      # source repository is a Pro/Team/Business feature AND is tied to Automated Builds, which
-      # Docker has deprecated for retirement on 2027-04-01 — so the supported path is to write
-      # the overview through the API, which is what this does.
+      # The Docker Hub repository overview is NOT updated here, and cannot be.
       #
-      # docs/docker-hub.md rather than README.md: the README's links are relative and would break
-      # here, and its first screen is written for somebody arriving at the repository rather than
-      # somebody looking at an image and wanting to run it.
+      # Docker Hub refuses to edit a repository's description with a personal access token
+      # whatever its scope: the API answers "access to the resource is forbidden with personal
+      # access token", so the PATCH fails with 403 even though the token authenticates. Tried
+      # with peter-evans/dockerhub-description and confirmed against docker/hub-feedback#1927.
       #
-      # It needs a token with read/write/delete scope. A push-only token authenticates but cannot
-      # write the description, and the failure is not obvious — hence continue-on-error, so a
-      # published release is never marked failed over its description.
-      - name: Update the Docker Hub overview
-        uses: peter-evans/dockerhub-description@e98e4d1628a5f3be2be7c231e50981aee98723ae # v4.0.0
-        continue-on-error: true
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-          repository: gravadigital/nats-zitadel-auth-callout
-          readme-filepath: ./docs/docker-hub.md
-          # Shown in Docker Hub search results. Limited to 100 characters.
-          short-description: "NATS auth callout: authenticate connections against OIDC and mint per-role permissions"
-          enable-url-completion: true
+      # The only two ways around it are worse than the problem:
+      #
+      #   - a username and PASSWORD instead of a token, which means disabling 2FA on an account
+      #     that can push a public image of an authorization component. Not worth it.
+      #   - Automated Builds, which is a paid feature and is deprecated for retirement on
+      #     2027-04-01.
+      #
+      # So the overview is maintained by hand from docs/docker-hub.md — Docker Hub → the
+      # repository → General → Add overview. It changes far less often than releases do.

@@ -1,3 +1,16 @@
+<!--
+This file is the Docker Hub repository overview. Applying it is MANUAL: Docker Hub → the
+repository → General → Add overview, then paste everything below this comment.
+
+It is not automated because Docker Hub refuses to edit a description with a personal access
+token whatever its scope; see the note in .github/workflows/release.yml. Keep the links
+absolute — relative ones break outside GitHub — and the whole file under 25,000 bytes.
+
+The short description, edited in the same place, is limited to 100 characters:
+
+  NATS auth callout: authenticate connections against OIDC and mint per-role permissions
+-->
+
 # nats-zitadel-auth-callout
 
 Authenticate NATS connections against your OIDC identity provider, and give each one the

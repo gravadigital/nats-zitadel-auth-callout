@@ -13,10 +13,13 @@ under **Changed** with what a deployment has to do.
 
 ### Added
 
-- The release workflow now writes the **Docker Hub repository overview** and short description
-  from `docs/docker-hub.md`, so the image page describes what it is and links back to the source.
-  Docker Hub's own source-repository linking is a paid feature tied to Automated Builds, which is
-  deprecated for retirement in April 2027, so the description API is the supported path.
+- `docs/docker-hub.md`, the **Docker Hub repository overview**: what the image is, what to mount,
+  the tag policy, and links back to the source and documentation.
+
+  It is applied by hand rather than from the release workflow. Docker Hub refuses to edit a
+  repository description with a personal access token whatever its scope, and the alternatives —
+  a password with 2FA disabled, or the deprecated Automated Builds — are both worse than pasting
+  markdown occasionally. The reasoning is recorded in `.github/workflows/release.yml`.
 
 ## [0.1.0] - 2026-08-11
 
