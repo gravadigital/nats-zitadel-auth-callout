@@ -98,7 +98,8 @@ Requires Go 1.26+, `nsc` and `nats-server` on the PATH. The subjects above come 
 **Reference**
 
 - [Examples](examples/) — a worked configuration for both server modes.
-- [Changelog](CHANGELOG.md) · [Security policy](SECURITY.md) · [Roadmap](docs/ROADMAP.md)
+- [Changelog](CHANGELOG.md) · [Security policy](SECURITY.md) ·
+  [Open issues](https://github.com/gravadigital/nats-zitadel-auth-callout/issues)
 
 ## Status
 
