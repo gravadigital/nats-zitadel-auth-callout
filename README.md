@@ -414,6 +414,7 @@ scripts/token-info.sh             what a token carries and why the callout would
 docs/zitadel.md                   configuring Zitadel: roles, service users, token checks
 docs/troubleshooting.md           symptom → cause, for when something does not work
 docs/client.md                    connecting a client: credentials, token, inbox prefix
+examples/*/callout.yaml           an optional configuration file, one per server mode
 examples/client/                  a runnable client, the reference for the three steps
 scripts/nsc-plan.sh               prints the nsc commands to provision an existing NATS
 scripts/nsc-extract.sh            reads an nsc store and writes the callout's environment
@@ -593,13 +594,58 @@ alone so existing clients need no change; the template then has to grant the inb
 (typically `_INBOX.>`), which means any client in the account can subscribe to another's replies.
 That trade-off is why `hashed` remains the default.
 
-### 10.5 Validation is per-mode
+### 10.5 A configuration file, if you want one
+
+Everything can be set through environment variables, and that alone is a complete way to run the
+service. A file is available for the parts that describe the *shape* of a deployment:
+
+```sh
+CALLOUT_CONFIG_FILE=/etc/auth-callout/callout.yaml
+```
+
+```yaml
+server:
+  mode: operator                   # everything under here depends on this
+  url: nats://nats.internal:4222
+  app_account_pub: ABAC…           # operator mode names the account by PUBKEY
+idp:
+  mode: zitadel
+  issuer_url: https://id.example.com
+  project_id: "200000000000000002"
+permissions:
+  rules_path: /etc/auth-callout/rules.yaml
+  instance: prod
+  inbox_mode: hashed
+log:
+  level: info
+```
+
+Worked files for both modes: [operator](examples/operator-mode/callout.yaml),
+[config](examples/config-mode/callout.yaml). Put them side by side — the `server` section is the
+only place the two modes differ, which is the thing a flat list of variables cannot show.
+
+Three rules, and there are no exceptions to any of them:
+
+- **The environment always wins.** Setting a variable overrides the file, including setting it to
+  empty, which is how a deployment clears something a file it does not own turned on. Startup
+  logs every file key that lost to a variable, because *"I changed the file and nothing
+  happened"* is otherwise a long afternoon.
+- **Secrets never go in the file.** Seeds, passwords and credential paths come from the
+  environment only, and a file that sets one **fails at startup** naming the variable to use
+  instead. A seed written into a YAML file ends up in version control eventually.
+- **Unknown keys are rejected**, like everywhere else in this service: a silently ignored typo
+  leaves a deployment running on a default nobody picked.
+
+`auth-callout verify` reports which file it read, so a clean report is a report about the
+configuration the service will actually use.
+
+### 10.6 Validation is per-mode
 
 A variable the selected mode does not read is an **error**, not silently ignored. Setting
 `CALLOUT_APP_ACCOUNT_PUB` in config mode fails at startup and says why, rather than leaving you
 to believe you configured something the service never reads.
 
-### 10.6 Checking the wiring before serving traffic
+### 10.7 Checking the wiring before serving traffic
 
 ```sh
 auth-callout verify --client-creds /path/to/client.creds     # operator mode

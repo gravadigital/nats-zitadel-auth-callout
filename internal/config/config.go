@@ -144,41 +144,110 @@ type Config struct {
 	LogLevel string
 }
 
-// Load assembles the Config from the environment and validates it.
+// Load assembles the Config and validates it.
+//
+// Three layers, each overriding the one before it:
+//
+//	built-in defaults  <-  the file at CALLOUT_CONFIG_FILE (optional)  <-  the environment
+//
+// The environment always wins, with no per-key exceptions. Secrets come from the environment
+// only; a file that sets one is refused (see ErrSecretInFile).
 func Load() (*Config, error) {
+	cfg, _, err := load()
+	return cfg, err
+}
+
+// LoadWithSource behaves like Load and additionally reports which file was read and which of its
+// keys the environment overrode, for the service to log at startup.
+func LoadWithSource() (cfg *Config, file string, overridden []string, err error) {
+	c, src, err := load()
+	if err != nil {
+		return nil, "", nil, err
+	}
+	return c, src.path, src.overridden, nil
+}
+
+// source records where the configuration came from, for reporting.
+type source struct {
+	path       string
+	overridden []string
+}
+
+func load() (*Config, source, error) {
+	// Layer 1: the defaults. Operator mode keeps existing deployments working with no new
+	// variable; mock IdP is the one that cannot silently be mistaken for a real one, because the
+	// service warns loudly about it on every startup.
 	cfg := &Config{
-		NATSURL: env("CALLOUT_NATS_URL", "nats://127.0.0.1:4222"),
-		// Defaulting to operator keeps every existing deployment working with no new variable.
-		ServerMode:                env("CALLOUT_SERVER_MODE", ServerModeOperator),
-		HandlerCreds:              os.Getenv("CALLOUT_HANDLER_CREDS"),
-		HandlerUser:               os.Getenv("CALLOUT_HANDLER_USER"),
-		HandlerPassword:           os.Getenv("CALLOUT_HANDLER_PASSWORD"),
-		HandlerNKeySeed:           os.Getenv("CALLOUT_HANDLER_NKEY_SEED"),
-		AppAccountSigningKeySeed:  os.Getenv("CALLOUT_APP_ACCOUNT_SK_SEED"),
-		AppAccountPubKey:          os.Getenv("CALLOUT_APP_ACCOUNT_PUB"),
-		TargetAccount:             os.Getenv("CALLOUT_TARGET_ACCOUNT"),
-		AuthAccountSigningKeySeed: os.Getenv("CALLOUT_AUTH_ACCOUNT_SK_SEED"),
-		XKeySeed:                  os.Getenv("CALLOUT_XKEY_SEED"),
-		// No default on purpose: defaulting to the bundled example means a deployment that
-		// forgets to mount its own configuration STARTS, serving example roles instead of
-		// failing. Requiring it turns that into a startup error naming the variable.
-		RulesPath:         os.Getenv("CALLOUT_RULES_PATH"),
-		Instance:          os.Getenv("CALLOUT_INSTANCE"),
-		IDPMode:           env("CALLOUT_IDP_MODE", IDPModeMock),
-		ZitadelIssuerURL:  os.Getenv("CALLOUT_ZITADEL_ISSUER_URL"),
-		ZitadelProjectID:  os.Getenv("CALLOUT_ZITADEL_PROJECT_ID"),
-		OIDCIssuerURL:     os.Getenv("CALLOUT_OIDC_ISSUER_URL"),
-		OIDCRolesClaim:    os.Getenv("CALLOUT_OIDC_ROLES_CLAIM"),
-		OIDCUsernameClaim: env("CALLOUT_OIDC_USERNAME_CLAIM", "preferred_username"),
-		OIDCAudience:      os.Getenv("CALLOUT_OIDC_AUDIENCE"),
-		InboxMode:         env("CALLOUT_INBOX_MODE", InboxModeHashed),
-		LogLevel:          env("CALLOUT_LOG_LEVEL", "info"),
+		NATSURL:           "nats://127.0.0.1:4222",
+		ServerMode:        ServerModeOperator,
+		IDPMode:           IDPModeMock,
+		OIDCUsernameClaim: "preferred_username",
+		InboxMode:         InboxModeHashed,
+		LogLevel:          "info",
+		// RulesPath has NO default on purpose: defaulting to the bundled example means a
+		// deployment that forgets to mount its own configuration starts and serves example roles
+		// instead of failing. Requiring it turns that into a startup error naming the setting.
 	}
 
-	if err := cfg.validate(); err != nil {
-		return nil, err
+	var src source
+
+	// Layer 2: the file, when one is configured.
+	if path := os.Getenv(FileEnvVar); path != "" {
+		file, err := LoadFile(path)
+		if err != nil {
+			return nil, src, err
+		}
+		file.applyTo(cfg)
+		src.path = path
+		src.overridden = file.overriddenBy(envIsSet)
 	}
-	return cfg, nil
+
+	// Layer 3: the environment.
+	envOverride(&cfg.NATSURL, "CALLOUT_NATS_URL")
+	envOverride(&cfg.ServerMode, "CALLOUT_SERVER_MODE")
+	envOverride(&cfg.HandlerCreds, "CALLOUT_HANDLER_CREDS")
+	envOverride(&cfg.HandlerUser, "CALLOUT_HANDLER_USER")
+	envOverride(&cfg.HandlerPassword, "CALLOUT_HANDLER_PASSWORD")
+	envOverride(&cfg.HandlerNKeySeed, "CALLOUT_HANDLER_NKEY_SEED")
+	envOverride(&cfg.AppAccountSigningKeySeed, "CALLOUT_APP_ACCOUNT_SK_SEED")
+	envOverride(&cfg.AppAccountPubKey, "CALLOUT_APP_ACCOUNT_PUB")
+	envOverride(&cfg.TargetAccount, "CALLOUT_TARGET_ACCOUNT")
+	envOverride(&cfg.AuthAccountSigningKeySeed, "CALLOUT_AUTH_ACCOUNT_SK_SEED")
+	envOverride(&cfg.XKeySeed, "CALLOUT_XKEY_SEED")
+	envOverride(&cfg.RulesPath, "CALLOUT_RULES_PATH")
+	envOverride(&cfg.Instance, "CALLOUT_INSTANCE")
+	envOverride(&cfg.IDPMode, "CALLOUT_IDP_MODE")
+	envOverride(&cfg.ZitadelIssuerURL, "CALLOUT_ZITADEL_ISSUER_URL")
+	envOverride(&cfg.ZitadelProjectID, "CALLOUT_ZITADEL_PROJECT_ID")
+	envOverride(&cfg.OIDCIssuerURL, "CALLOUT_OIDC_ISSUER_URL")
+	envOverride(&cfg.OIDCRolesClaim, "CALLOUT_OIDC_ROLES_CLAIM")
+	envOverride(&cfg.OIDCUsernameClaim, "CALLOUT_OIDC_USERNAME_CLAIM")
+	envOverride(&cfg.OIDCAudience, "CALLOUT_OIDC_AUDIENCE")
+	envOverride(&cfg.InboxMode, "CALLOUT_INBOX_MODE")
+	envOverride(&cfg.LogLevel, "CALLOUT_LOG_LEVEL")
+
+	if err := cfg.validate(); err != nil {
+		return nil, src, err
+	}
+	return cfg, src, nil
+}
+
+// envOverride replaces dst when the variable is SET, even to an empty string.
+//
+// Honouring an explicit empty value matters once a file is in play: it is how a deployment turns
+// off something the file enables — `CALLOUT_ZITADEL_PROJECT_ID=` to widen role reading, say —
+// and treating that as "unset" would make the setting impossible to clear without editing the
+// file the deployment may not own.
+func envOverride(dst *string, name string) {
+	if value, ok := os.LookupEnv(name); ok {
+		*dst = value
+	}
+}
+
+// envIsSet reports whether a variable is present, empty or not.
+func envIsSet(name string) bool {
+	_, ok := os.LookupEnv(name)
+	return ok
 }
 
 // validate checks that nothing essential is missing. It is all done at once so that a
@@ -200,25 +269,26 @@ func (c *Config) validate() error {
 		}
 	}
 
+	// This one is a secret, so it has no file key: naming one would invite writing it there.
 	require("CALLOUT_APP_ACCOUNT_SK_SEED", c.AppAccountSigningKeySeed)
-	require("CALLOUT_RULES_PATH", c.RulesPath)
+	require(setting("CALLOUT_RULES_PATH", "permissions.rules_path"), c.RulesPath)
 
 	// The signing key is the only key both modes share; everything else is per-mode.
 	switch c.ServerMode {
 	case ServerModeOperator:
-		require("CALLOUT_APP_ACCOUNT_PUB", c.AppAccountPubKey)
+		require(setting("CALLOUT_APP_ACCOUNT_PUB", "server.app_account_pub"), c.AppAccountPubKey)
 		require("CALLOUT_AUTH_ACCOUNT_SK_SEED", c.AuthAccountSigningKeySeed)
-		reject("CALLOUT_TARGET_ACCOUNT", c.TargetAccount,
+		reject(setting("CALLOUT_TARGET_ACCOUNT", "server.target_account"), c.TargetAccount,
 			"operator mode places users by issuer-account pubkey, not by account name")
 	case ServerModeConfig:
-		require("CALLOUT_TARGET_ACCOUNT", c.TargetAccount)
-		reject("CALLOUT_APP_ACCOUNT_PUB", c.AppAccountPubKey,
+		require(setting("CALLOUT_TARGET_ACCOUNT", "server.target_account"), c.TargetAccount)
+		reject(setting("CALLOUT_APP_ACCOUNT_PUB", "server.app_account_pub"), c.AppAccountPubKey,
 			"a config-mode server rejects a User JWT carrying issuer_account")
 		reject("CALLOUT_AUTH_ACCOUNT_SK_SEED", c.AuthAccountSigningKeySeed,
 			"config mode signs both the User JWT and the response with CALLOUT_APP_ACCOUNT_SK_SEED")
 	default:
-		return fmt.Errorf("config: invalid CALLOUT_SERVER_MODE %q (expected %s or %s)",
-			c.ServerMode, ServerModeOperator, ServerModeConfig)
+		return fmt.Errorf("config: invalid server mode %q from %s (expected %s or %s)",
+			c.ServerMode, setting("CALLOUT_SERVER_MODE", "server.mode"), ServerModeOperator, ServerModeConfig)
 	}
 
 	// The handler's own connection. Exactly one form has to be given: accepting several and
@@ -246,46 +316,48 @@ func (c *Config) validate() error {
 
 	switch c.IDPMode {
 	case IDPModeZitadel:
-		require("CALLOUT_ZITADEL_ISSUER_URL", c.ZitadelIssuerURL)
+		require(setting("CALLOUT_ZITADEL_ISSUER_URL", "idp.issuer_url"), c.ZitadelIssuerURL)
 	case IDPModeOIDC:
-		require("CALLOUT_OIDC_ISSUER_URL", c.OIDCIssuerURL)
+		require(setting("CALLOUT_OIDC_ISSUER_URL", "idp.issuer_url"), c.OIDCIssuerURL)
 		// There is no cross-provider convention for where roles live, so this cannot be
 		// defaulted: guessing would silently authorize with an empty role list, and an empty
 		// role list means no rule matches and every connection is refused.
-		require("CALLOUT_OIDC_ROLES_CLAIM", c.OIDCRolesClaim)
+		require(setting("CALLOUT_OIDC_ROLES_CLAIM", "idp.roles_claim"), c.OIDCRolesClaim)
 	case IDPModeMock:
 	default:
-		return fmt.Errorf("config: invalid CALLOUT_IDP_MODE %q (expected %s, %s or %s)",
-			c.IDPMode, IDPModeZitadel, IDPModeOIDC, IDPModeMock)
+		return fmt.Errorf("config: invalid IdP mode %q from %s (expected %s, %s or %s)",
+			c.IDPMode, setting("CALLOUT_IDP_MODE", "idp.mode"), IDPModeZitadel, IDPModeOIDC, IDPModeMock)
 	}
 
 	switch c.InboxMode {
 	case InboxModeHashed, InboxModePassthrough:
 	default:
-		return fmt.Errorf("config: invalid CALLOUT_INBOX_MODE %q (expected %s or %s)",
-			c.InboxMode, InboxModeHashed, InboxModePassthrough)
+		return fmt.Errorf("config: invalid inbox mode %q from %s (expected %s or %s)",
+			c.InboxMode, setting("CALLOUT_INBOX_MODE", "permissions.inbox_mode"), InboxModeHashed, InboxModePassthrough)
 	}
 
 	if len(unexpected) > 0 {
-		return fmt.Errorf("config: variables that do not apply to CALLOUT_SERVER_MODE=%s: %s",
+		return fmt.Errorf("config: settings that do not apply to server mode %q: %s",
 			c.ServerMode, strings.Join(unexpected, ", "))
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("config: missing environment variables: %s", strings.Join(missing, ", "))
+		return fmt.Errorf("config: missing settings: %s", strings.Join(missing, ", "))
 	}
 
 	// The instance is a subject token: a dot or a wildcard would break it in a way that is hard
 	// to diagnose (the permissions would be shifted by one segment). Empty is allowed — it just
 	// means templates must not reference {{instance}}.
 	if strings.ContainsAny(c.Instance, ".*> ") {
-		return errors.New("config: CALLOUT_INSTANCE cannot contain `.`, `*`, `>` or spaces")
+		return fmt.Errorf("config: the instance cannot contain `.`, `*`, `>` or spaces (%s)",
+			setting("CALLOUT_INSTANCE", "permissions.instance"))
 	}
 
 	// The target account is a NAME the server looks up. An account pubkey is the single most
 	// likely mistake here (ADR-26's wording invites it) and it fails at connection time with an
 	// error that does not mention the cause, so it is caught at startup.
 	if c.ServerMode == ServerModeConfig && looksLikeAccountPubKey(c.TargetAccount) {
-		return fmt.Errorf("config: CALLOUT_TARGET_ACCOUNT must be the account NAME, not its public key (%q looks like a pubkey; the server resolves the placement by name)", c.TargetAccount)
+		return fmt.Errorf("config: the target account must be the account NAME, not its public key (%q looks like a pubkey; the server resolves the placement by name) — %s",
+			c.TargetAccount, setting("CALLOUT_TARGET_ACCOUNT", "server.target_account"))
 	}
 
 	return nil
@@ -301,9 +373,8 @@ func looksLikeAccountPubKey(value string) bool {
 func (c *Config) ServerModeIsConfig() bool { return c.ServerMode == ServerModeConfig }
 
 // env reads a variable with a fallback.
-func env(name, fallback string) string {
-	if value := os.Getenv(name); value != "" {
-		return value
-	}
-	return fallback
+// setting names a configuration value in BOTH forms, because a deployment may be using either
+// and an error that names only one sends the reader to a file they do not have.
+func setting(envVar, fileKey string) string {
+	return fmt.Sprintf("%s (or %s in the configuration file)", envVar, fileKey)
 }

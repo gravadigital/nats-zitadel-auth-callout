@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -35,12 +36,29 @@ func loadWith(t *testing.T, env map[string]string) (*Config, error) {
 		"CALLOUT_OIDC_USERNAME_CLAIM", "CALLOUT_OIDC_AUDIENCE", "CALLOUT_INBOX_MODE",
 		"CALLOUT_LOG_LEVEL",
 	} {
+		// UNSET rather than set-to-empty. The two are different: an explicitly empty variable is
+		// how a deployment clears a value the configuration file set, so it overrides the
+		// built-in default instead of falling back to it.
 		t.Setenv(name, "")
+		os.Unsetenv(name)
 	}
+	// The configuration file is opt-in; no test here should pick up a developer's own.
+	t.Setenv(FileEnvVar, "")
+	os.Unsetenv(FileEnvVar)
 	for name, value := range env {
 		t.Setenv(name, value)
 	}
 	return Load()
+}
+
+// loadWithSourceIn is loadWith for the tests that need to see where each value came from.
+func loadWithSourceIn(t *testing.T, env map[string]string) (*Config, string, []string, error) {
+	t.Helper()
+	if _, err := loadWith(t, env); err != nil {
+		return nil, "", nil, err
+	}
+	// loadWith has already put the environment in place, so this reads the same one.
+	return LoadWithSource()
 }
 
 // TestOperatorModeIsTheDefault pins backward compatibility: an environment written before the

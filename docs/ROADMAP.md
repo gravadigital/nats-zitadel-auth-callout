@@ -9,6 +9,8 @@ Last reviewed: 2026-08-11, against the working tree — not from memory.
 
 - The repository keeps the name `nats-zitadel-auth-callout`, under the `gravadigital`
   organisation. Zitadel stays the headline provider even though a generic `oidc` mode exists.
+- Configuration is an optional YAML file plus environment variables, with the environment always
+  winning and secrets never allowed in the file.
 - No multi-account support (`account:` per rule). It would only work in config mode — operator
   mode needs one signing key per target account — and both modes must behave the same.
 - `NOTICE` keeps the copyright. Publishing does not give up authorship.
@@ -21,7 +23,7 @@ Last reviewed: 2026-08-11, against the working tree — not from memory.
 |---|---|
 | 1. Examples | **done** — `examples/`, split by server mode |
 | 2. Identity provider | **mostly done** — one small item left |
-| 3. Configuration model | **not started, needs discussion** |
+| 3. Configuration model | **done** — optional file, environment overrides it |
 | 4. Adopting an existing NATS | **done** |
 | 5. CI/CD and publishing | **not started** — the biggest remaining block |
 | 6. Removing internal references | **done** |
@@ -66,21 +68,6 @@ who gets into a message bus.
 ---
 
 ## Worth doing, not blocking
-
-### 3. Configuration model — needs a decision first
-
-Everything is environment variables, and there are now around twenty. The `rules.yaml` +
-templates format is liked and is not in question; what is open is whether the **service's own**
-configuration should also have a file, with environment variables overriding it.
-
-Arguments to weigh when we get to it:
-
-- a `config.yaml` is what a Helm/Compose deployment expects, and it documents itself;
-- environment variables are what containers and secret managers hand you naturally;
-- two sources need a precedence rule, and a wrong guess about precedence in an authorization
-  component is expensive.
-
-Nothing else depends on this, which is why it has stayed open without cost.
 
 ### 2. Identity provider — one item left
 
@@ -129,5 +116,4 @@ Recorded so they do not come back as open questions.
 2. README framing, then the split if we want it.
 3. `docker-compose.yml`.
 4. Release workflow, image name, first tag, `CHANGELOG.md`.
-5. The configuration model discussion (theme 3).
-6. The code findings, in one pass.
+5. The code findings, in one pass.

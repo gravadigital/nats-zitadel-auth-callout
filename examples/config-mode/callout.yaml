@@ -1,0 +1,55 @@
+# callout.yaml — config mode.
+#
+# Point the service at this file with CALLOUT_CONFIG_FILE=/path/to/callout.yaml.
+#
+# It is OPTIONAL: everything here can be set through environment variables instead, and any
+# variable that IS set wins over this file. Secrets never appear here — see the bottom.
+#
+# Compare this file with examples/operator-mode/callout.yaml: the `server` section is where the
+# two modes differ, and everything below it is identical.
+
+server:
+  mode: config
+  url: nats://127.0.0.1:4222
+
+  # Config mode names the target account by NAME — the name from the accounts{} block in
+  # nats-server.conf — because the server resolves the placement by name. An account public key
+  # here fails with "no valid account" even though the key is correct, so the service refuses one
+  # at startup.
+  target_account: APP
+
+  handler:
+    # The user the callout connects as. It MUST be the one in auth_callout.auth_users.
+    #
+    # Only the name lives here. Its password is a secret and comes from the environment; a file
+    # that sets one is refused.
+    user: callout-handler
+
+idp:
+  # zitadel | oidc | mock. `oidc` works against any standards-compliant provider.
+  mode: oidc
+  issuer_url: https://keycloak.example.com/realms/production
+  # Required in oidc mode: there is no cross-provider convention for where roles live, and
+  # guessing would authorize with an empty role list, which refuses every connection.
+  #   Keycloak: realm_access.roles   Entra: roles   Auth0: a namespaced claim
+  roles_claim: realm_access.roles
+  # Worth setting: without it, any token the provider issued for ANY of its clients verifies
+  # here. The service logs audienceChecked=false at startup when it is unset.
+  audience: nats
+
+permissions:
+  rules_path: /etc/auth-callout/rules.yaml
+  instance: prod
+  inbox_mode: hashed
+
+log:
+  level: info
+
+# --- What is NOT here -------------------------------------------------------------------------
+# Secrets come from the environment only, and the service refuses to start if it finds one in
+# this file.
+#
+#   CALLOUT_HANDLER_PASSWORD       the handler's password (or CALLOUT_HANDLER_NKEY_SEED)
+#   CALLOUT_APP_ACCOUNT_SK_SEED    the auth_callout.issuer key: signs BOTH the User JWT and the
+#                                  response — config mode has one key where operator mode has two
+#   CALLOUT_XKEY_SEED              decrypts callout requests

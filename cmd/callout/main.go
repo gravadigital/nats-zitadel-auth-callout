@@ -85,12 +85,21 @@ verify options:
 }
 
 func run() error {
-	cfg, err := config.Load()
+	cfg, configFile, overridden, err := config.LoadWithSource()
 	if err != nil {
 		return err
 	}
 
 	log := newLogger(cfg.LogLevel)
+
+	if configFile != "" {
+		log.Info().Str("file", configFile).Msg("configuration file loaded")
+		// "I changed the file and nothing happened" is otherwise a genuinely confusing
+		// afternoon: the value is there, it is just losing to a variable set somewhere else.
+		for _, key := range overridden {
+			log.Warn().Msg("configuration file value overridden by the environment: " + key)
+		}
+	}
 
 	// The IdP mode is logged first and prominently: it is the difference between validating
 	// against Zitadel and accepting any identity the client claims to have.
@@ -238,12 +247,22 @@ func runVerify(args []string) error {
 	// Loading the configuration is itself the first check: per-mode validation rejects a
 	// variable the selected mode does not read, and a missing rules path, before anything
 	// touches the network.
-	cfg, err := config.Load()
+	cfg, configFile, overridden, err := config.LoadWithSource()
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("Verifying: serverMode=%s idp=%s nats=%s\n\n", cfg.ServerMode, cfg.IDPMode, cfg.NATSURL)
+	fmt.Printf("Verifying: serverMode=%s idp=%s nats=%s\n", cfg.ServerMode, cfg.IDPMode, cfg.NATSURL)
+	if configFile != "" {
+		// Which file was read matters here more than anywhere: the whole point of `verify` is to
+		// confirm the deployment's real configuration, and reading a different file than the
+		// service will read would make a clean report meaningless.
+		fmt.Printf("Configuration file: %s\n", configFile)
+		for _, key := range overridden {
+			fmt.Printf("  note: %s\n", key)
+		}
+	}
+	fmt.Println()
 
 	// The rules and templates load exactly as the service would load them, so a broken
 	// configuration is reported here rather than at the next restart.

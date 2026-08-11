@@ -1,0 +1,50 @@
+# callout.yaml — operator mode.
+#
+# Point the service at this file with CALLOUT_CONFIG_FILE=/path/to/callout.yaml.
+#
+# It is OPTIONAL: everything here can be set through environment variables instead, and any
+# variable that IS set wins over this file. Secrets never appear here — see the bottom.
+
+server:
+  mode: operator
+  url: nats://127.0.0.1:4322
+
+  # Operator mode names the target account by its PUBLIC KEY, which travels in the User JWT's
+  # IssuerAccount claim. (Config mode uses a name instead — that is the visible difference
+  # between the two files.)
+  app_account_pub: ABACLEQRISCUB7DI5MZRJWCA4CHNULUFGW234IKWX3JCWDHUIUPALEQU
+
+idp:
+  # zitadel | oidc | mock. `mock` accepts any identity a client claims: development only.
+  mode: zitadel
+  issuer_url: https://id.example.com
+  # Narrows role reading to one project. Recommended: without it a same-named role from another
+  # project could match a rule.
+  project_id: "200000000000000002"
+
+permissions:
+  # Required. There is no default, so a deployment cannot fall back to the bundled example by
+  # accident. Templates resolve relative to THIS file's directory.
+  rules_path: /etc/auth-callout/rules.yaml
+  # The {{instance}} placeholder. Optional — omit it when your templates never reference it.
+  instance: prod
+  # hashed | passthrough. See the README before changing this: passthrough drops per-user reply
+  # isolation.
+  inbox_mode: hashed
+
+log:
+  level: info
+
+# --- What is NOT here -------------------------------------------------------------------------
+# Secrets come from the environment only, and the service refuses to start if it finds one in
+# this file — a seed written down here ends up in version control eventually.
+#
+#   CALLOUT_HANDLER_CREDS          the handler's credentials
+#   CALLOUT_APP_ACCOUNT_SK_SEED    signs the User JWT
+#   CALLOUT_AUTH_ACCOUNT_SK_SEED   signs the authorization response
+#   CALLOUT_XKEY_SEED              decrypts callout requests
+#
+# Each accepts either the seed itself or a path to a file holding it, so both Kubernetes secret
+# references and Docker secret mounts work unchanged.
+#
+# scripts/nsc-extract.sh writes all four out of an nsc store.
