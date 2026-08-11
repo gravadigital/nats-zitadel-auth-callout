@@ -114,7 +114,7 @@ func signToken(t *testing.T, key jwk.Key, issuer string) string {
 	t.Helper()
 	tok, err := jwt.NewBuilder().
 		Issuer(issuer).
-		Subject("385270818583609346").
+		Subject("100000000000000001").
 		IssuedAt(time.Now()).
 		Expiration(time.Now().Add(time.Hour)).
 		Build()
@@ -156,7 +156,7 @@ func TestVerifyTokenRefetchesOnKeyRotation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("after the rotation the token should verify without waiting for the refresh: %v", err)
 	}
-	if claims.Subject != "385270818583609346" {
+	if claims.Subject != "100000000000000001" {
 		t.Fatalf("unexpected subject: %q", claims.Subject)
 	}
 	if js.hits.Load() <= before {

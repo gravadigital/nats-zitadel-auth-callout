@@ -16,7 +16,13 @@ RUN mkdir -p /etc/auth-callout /etc/nats-creds
 
 COPY --from=builder /out/callout /usr/local/bin/callout
 
-# The configuration (rules.yaml + templates) and the credentials are mounted as volumes: they
-# do not live in the image. See deploy/nats/ in the Hermes repo.
+# The configuration (rules.yaml + its templates) and the credentials are mounted as volumes:
+# they do not live in the image, so the same image serves every deployment and no secret is
+# ever baked into a layer.
+#
+#   /etc/auth-callout   rules.yaml + templates/   -> point CALLOUT_RULES_PATH at it
+#   /etc/nats-creds     handler credentials, signing key seeds, XKey seed
+#
+# Everything else is environment variables; see the configuration section of the README.
 USER callout
 ENTRYPOINT ["/usr/local/bin/callout"]

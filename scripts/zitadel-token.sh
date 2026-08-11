@@ -13,8 +13,8 @@
 #      Simpler: a single curl, nothing to sign.
 #
 # Usage:
-#   ZITADEL_ISSUER_URL=https://id.grava.io ./scripts/zitadel-token.sh secrets/poc-user.json
-#   cat creds.json | ZITADEL_ISSUER_URL=https://id.grava.io ./scripts/zitadel-token.sh
+#   ZITADEL_ISSUER_URL=https://id.example.com ./scripts/zitadel-token.sh secrets/poc-user.json
+#   cat creds.json | ZITADEL_ISSUER_URL=https://id.example.com ./scripts/zitadel-token.sh
 #
 # Variables:
 #   ZITADEL_ISSUER_URL        (required) the Zitadel instance

@@ -3,11 +3,11 @@
 // Tests against a REAL Zitadel instance. They sit behind the `live` build tag because they
 // need network access and a reachable instance: they do not run under `go test ./...`.
 //
-//	CALLOUT_ZITADEL_ISSUER_URL=https://id.grava.io go test -tags live -v ./internal/idp/
+//	CALLOUT_ZITADEL_ISSUER_URL=https://id.example.com go test -tags live -v ./internal/idp/
 //
 // With a token at hand, the full validation path is verified as well:
 //
-//	CALLOUT_ZITADEL_ISSUER_URL=https://id.grava.io \
+//	CALLOUT_ZITADEL_ISSUER_URL=https://id.example.com \
 //	CALLOUT_TEST_TOKEN="$(./scripts/zitadel-token.sh secrets/poc-service.json)" \
 //	  go test -tags live -v ./internal/idp/
 package idp
