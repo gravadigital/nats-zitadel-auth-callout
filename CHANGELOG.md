@@ -9,6 +9,17 @@ under **Changed** with what a deployment has to do.
 
 ## [Unreleased]
 
+### Changed
+
+- The Docker Hub overview is applied **by hand** rather than from the release workflow. The step
+  added in 0.1.1 always fails with 403: Docker Hub refuses to edit a repository description with
+  a personal access token whatever its scope. The alternatives — a password with 2FA disabled, or
+  the deprecated Automated Builds — are both worse than pasting markdown occasionally, so the
+  step is gone and the reasoning is recorded in `.github/workflows/release.yml`.
+
+  No action needed by anyone deploying: the step only ever touched the Docker Hub page, never the
+  image.
+
 ## [0.1.1] - 2026-08-11
 
 ### Added
@@ -16,10 +27,11 @@ under **Changed** with what a deployment has to do.
 - `docs/docker-hub.md`, the **Docker Hub repository overview**: what the image is, what to mount,
   the tag policy, and links back to the source and documentation.
 
-  It is applied by hand rather than from the release workflow. Docker Hub refuses to edit a
-  repository description with a personal access token whatever its scope, and the alternatives —
-  a password with 2FA disabled, or the deprecated Automated Builds — are both worse than pasting
-  markdown occasionally. The reasoning is recorded in `.github/workflows/release.yml`.
+### Known issue
+
+- The release workflow's attempt to publish that overview fails with 403 and leaves the step
+  marked as failed. The image itself is built, published and smoke-tested normally. Fixed in the
+  next release.
 
 ## [0.1.0] - 2026-08-11
 
