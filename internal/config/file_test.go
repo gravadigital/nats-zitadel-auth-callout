@@ -138,6 +138,10 @@ func TestSecretsInFileAreRejected(t *testing.T) {
 		"password":  "server:\n  handler:\n    password: hunter2\n",
 		"creds":     "server:\n  handler:\n    creds: /etc/handler.creds\n",
 		"nkey seed": "server:\n  handler:\n    nkey_seed: SUAAAAA\n",
+		// The events connection has its own credential, so it has its own secret trap.
+		"events password":  "events:\n  password: hunter2\n",
+		"events creds":     "events:\n  creds: /etc/events.creds\n",
+		"events nkey seed": "events:\n  nkey_seed: SUAAAAA\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := loadWithFile(t, body, nil)
@@ -256,5 +260,45 @@ func TestOverriddenKeysAreReported(t *testing.T) {
 	}
 	if len(overridden) != 1 || !strings.Contains(overridden[0], "server.url") {
 		t.Fatalf("expected server.url to be reported as overridden, got %v", overridden)
+	}
+}
+
+// TestEventsSectionInFile: the whole publisher described in the file, with only its credential
+// coming from the environment — the same split the handler gets.
+func TestEventsSectionInFile(t *testing.T) {
+	body := `
+server:
+  mode: config
+  target_account: APP
+  handler:
+    user: callout-handler
+idp:
+  mode: mock
+permissions:
+  rules_path: /etc/auth-callout/rules.yaml
+  instance: prod
+events:
+  subject: "{{instance}}.events.auth"
+  stream: AUTH_EVENTS
+  user: callout-events
+  name_claim: profile.full_name
+  email_claim: profile.mail
+`
+	cfg, err := loadWithFile(t, body, map[string]string{
+		"CALLOUT_APP_ACCOUNT_SK_SEED": "SAAAA",
+		"CALLOUT_HANDLER_PASSWORD":    "hunter2",
+		"CALLOUT_EVENTS_PASSWORD":     "hunter3",
+	})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.EventsSubject != "{{instance}}.events.auth" || cfg.EventsStream != "AUTH_EVENTS" {
+		t.Errorf("subject/stream = %q/%q", cfg.EventsSubject, cfg.EventsStream)
+	}
+	if cfg.EventsUser != "callout-events" || cfg.EventsPassword != "hunter3" {
+		t.Errorf("events user = %q, password set = %v", cfg.EventsUser, cfg.EventsPassword != "")
+	}
+	if cfg.EventsNameClaim != "profile.full_name" || cfg.EventsEmailClaim != "profile.mail" {
+		t.Errorf("claim paths = %q/%q", cfg.EventsNameClaim, cfg.EventsEmailClaim)
 	}
 }

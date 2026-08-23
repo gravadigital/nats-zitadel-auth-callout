@@ -34,6 +34,9 @@ func loadWith(t *testing.T, env map[string]string) (*Config, error) {
 		"CALLOUT_INSTANCE", "CALLOUT_IDP_MODE", "CALLOUT_ZITADEL_ISSUER_URL",
 		"CALLOUT_ZITADEL_PROJECT_ID", "CALLOUT_OIDC_ISSUER_URL", "CALLOUT_OIDC_ROLES_CLAIM",
 		"CALLOUT_OIDC_USERNAME_CLAIM", "CALLOUT_OIDC_AUDIENCE", "CALLOUT_INBOX_MODE",
+		"CALLOUT_EVENTS_SUBJECT", "CALLOUT_EVENTS_STREAM", "CALLOUT_EVENTS_URL",
+		"CALLOUT_EVENTS_USER", "CALLOUT_EVENTS_PASSWORD", "CALLOUT_EVENTS_CREDS",
+		"CALLOUT_EVENTS_NKEY_SEED", "CALLOUT_EVENTS_NAME_CLAIM", "CALLOUT_EVENTS_EMAIL_CLAIM",
 		"CALLOUT_LOG_LEVEL",
 	} {
 		// UNSET rather than set-to-empty. The two are different: an explicitly empty variable is
@@ -298,4 +301,137 @@ func TestInvalidModesRejected(t *testing.T) {
 			t.Fatal("an invalid idp mode should fail")
 		}
 	})
+}
+
+// --- authentication events ---------------------------------------------------------------
+
+func TestEventsAreOffUnlessASubjectIsSet(t *testing.T) {
+	cfg, err := loadWith(t, baseEnv())
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// The feature has to be opt-in: an existing deployment must not start announcing who logs
+	// in, with their name and email, because it upgraded.
+	if cfg.EventsSubject != "" {
+		t.Errorf("EventsSubject = %q with nothing configured, want empty", cfg.EventsSubject)
+	}
+}
+
+func TestEventsSettingsWithoutASubjectAreRefused(t *testing.T) {
+	// Ignoring these would leave a deployment believing it had configured events while nothing
+	// reads any of it.
+	for _, name := range []string{
+		"CALLOUT_EVENTS_STREAM", "CALLOUT_EVENTS_URL", "CALLOUT_EVENTS_USER",
+		"CALLOUT_EVENTS_PASSWORD", "CALLOUT_EVENTS_CREDS", "CALLOUT_EVENTS_NKEY_SEED",
+		"CALLOUT_EVENTS_NAME_CLAIM", "CALLOUT_EVENTS_EMAIL_CLAIM",
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := baseEnv()
+			env[name] = "something"
+			_, err := loadWith(t, env)
+			if err == nil {
+				t.Fatalf("load succeeded with %s set and no events subject", name)
+			}
+			if !strings.Contains(err.Error(), "CALLOUT_EVENTS_SUBJECT") {
+				t.Errorf("error %q does not point at the subject setting", err)
+			}
+		})
+	}
+}
+
+func TestEventsRequireAStream(t *testing.T) {
+	env := baseEnv()
+	env["CALLOUT_EVENTS_SUBJECT"] = "dev.events.auth"
+	env["CALLOUT_EVENTS_CREDS"] = "/tmp/events.creds"
+
+	_, err := loadWith(t, env)
+	if err == nil {
+		t.Fatal("load succeeded with no events stream, want an error")
+	}
+	// The publisher waits for an ack. Without a stream there is nothing to give one, so every
+	// publish would time out.
+	if !strings.Contains(err.Error(), "CALLOUT_EVENTS_STREAM") {
+		t.Errorf("error %q does not name the stream setting", err)
+	}
+}
+
+func TestEventsCredentialForms(t *testing.T) {
+	// The events connection lands in a DIFFERENT account from the handler's, so it has its own
+	// credential — with the same "exactly one form" rule, for the same reason: picking one
+	// silently would leave it unclear which credential is in use.
+	base := func() map[string]string {
+		env := baseEnv()
+		env["CALLOUT_EVENTS_SUBJECT"] = "dev.events.auth"
+		env["CALLOUT_EVENTS_STREAM"] = "AUTH_EVENTS"
+		return env
+	}
+
+	t.Run("none", func(t *testing.T) {
+		_, err := loadWith(t, base())
+		if err == nil || !strings.Contains(err.Error(), "CALLOUT_EVENTS_CREDS") {
+			t.Fatalf("err = %v, want a complaint naming the credential forms", err)
+		}
+	})
+
+	t.Run("two", func(t *testing.T) {
+		env := base()
+		env["CALLOUT_EVENTS_CREDS"] = "/tmp/events.creds"
+		env["CALLOUT_EVENTS_USER"] = "callout-events"
+		env["CALLOUT_EVENTS_PASSWORD"] = "secret"
+		_, err := loadWith(t, env)
+		if err == nil || !strings.Contains(err.Error(), "more than one events credential") {
+			t.Fatalf("err = %v, want the two-forms error", err)
+		}
+	})
+
+	t.Run("user with no password", func(t *testing.T) {
+		env := base()
+		env["CALLOUT_EVENTS_USER"] = "callout-events"
+		_, err := loadWith(t, env)
+		if err == nil || !strings.Contains(err.Error(), "CALLOUT_EVENTS_PASSWORD") {
+			t.Fatalf("err = %v, want the missing password", err)
+		}
+	})
+
+	t.Run("creds alone is enough", func(t *testing.T) {
+		env := base()
+		env["CALLOUT_EVENTS_CREDS"] = "/tmp/events.creds"
+		if _, err := loadWith(t, env); err != nil {
+			t.Fatalf("load: %v", err)
+		}
+	})
+}
+
+func TestEventsURLDefaultsToTheServerURL(t *testing.T) {
+	env := baseEnv()
+	env["CALLOUT_NATS_URL"] = "nats://nats.internal:4222"
+	env["CALLOUT_EVENTS_SUBJECT"] = "dev.events.auth"
+	env["CALLOUT_EVENTS_STREAM"] = "AUTH_EVENTS"
+	env["CALLOUT_EVENTS_CREDS"] = "/tmp/events.creds"
+
+	cfg, err := loadWith(t, env)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// Same server, different account is the usual shape; a separate URL stays possible.
+	if cfg.EventsNATSURL != "nats://nats.internal:4222" {
+		t.Errorf("EventsNATSURL = %q, want the server URL", cfg.EventsNATSURL)
+	}
+}
+
+func TestEventsURLCanDifferFromTheServerURL(t *testing.T) {
+	env := baseEnv()
+	env["CALLOUT_NATS_URL"] = "nats://nats.internal:4222"
+	env["CALLOUT_EVENTS_SUBJECT"] = "dev.events.auth"
+	env["CALLOUT_EVENTS_STREAM"] = "AUTH_EVENTS"
+	env["CALLOUT_EVENTS_CREDS"] = "/tmp/events.creds"
+	env["CALLOUT_EVENTS_URL"] = "nats://events.internal:4222"
+
+	cfg, err := loadWith(t, env)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.EventsNATSURL != "nats://events.internal:4222" {
+		t.Errorf("EventsNATSURL = %q, want the explicit events URL", cfg.EventsNATSURL)
+	}
 }

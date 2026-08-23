@@ -39,6 +39,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/gravadigital/nats-zitadel-auth-callout/internal/authz"
+	"github.com/gravadigital/nats-zitadel-auth-callout/internal/events"
 	"github.com/gravadigital/nats-zitadel-auth-callout/internal/idp"
 )
 
@@ -124,6 +125,11 @@ type Service struct {
 	// public half is the one passed to `nsc edit authcallout --curve`.
 	xkey nkeys.KeyPair
 
+	// events announces each authenticated connection on the bus. It is NIL when the deployment
+	// configured no event subject, and every method on it is nil-safe: that is what keeps the
+	// second responsibility out of the authentication path entirely when it is not wanted.
+	events *events.Publisher
+
 	sub *nats.Subscription
 }
 
@@ -150,6 +156,10 @@ type Config struct {
 	// mode it defaults to SigningKey when omitted.
 	ResponseSigner nkeys.KeyPair
 	XKey           nkeys.KeyPair
+
+	// Events publishes an event per authenticated connection. Optional: nil means the
+	// deployment did not configure one, and nothing about the callout path changes.
+	Events *events.Publisher
 }
 
 // New builds the service. It validates the dependencies up front: otherwise each of these
@@ -227,6 +237,7 @@ func New(cfg Config) (*Service, error) {
 		targetAccount:  cfg.TargetAccount,
 		responseSigner: responseSigner,
 		xkey:           cfg.XKey,
+		events:         cfg.Events,
 	}, nil
 }
 
@@ -327,7 +338,12 @@ func (s *Service) handle(msg *nats.Msg) {
 		return
 	}
 
-	userJWT, err := s.mintUserJWT(req.UserNkey, identity, perms, claims.ExpiresAt)
+	// The session's end is computed once and used twice: it goes into the User JWT and into the
+	// event, so a consumer reading `expires_at` is reading the same instant the server will
+	// enforce rather than a second guess at it.
+	expiresAt := sessionExpiry(claims.ExpiresAt)
+
+	userJWT, err := s.mintUserJWT(req.UserNkey, identity, perms, expiresAt)
 	if err != nil {
 		s.log.Error().Err(err).Str("sub", claims.Subject).Msg("signing the User JWT failed")
 		s.respondError(msg, serverXKey, req.UserNkey, req.Server.ID, err)
@@ -338,6 +354,20 @@ func (s *Service) handle(msg *nats.Msg) {
 		s.log.Error().Err(err).Msg("sending the callout response failed")
 		return
 	}
+
+	// The connection is authenticated and the server already has its answer. Announcing it
+	// comes after that, deliberately: the event is queued and published from another goroutine,
+	// so neither a slow JetStream nor a broken one can delay this handshake or the connections
+	// queued behind it — a subscription delivers to its callback one message at a time.
+	s.events.Authenticated(events.Authentication{
+		Identity:  identity,
+		Claims:    claims,
+		Decision:  decision,
+		ClientIP:  clientIP,
+		Session:   req.UserNkey,
+		At:        time.Now(),
+		ExpiresAt: expiresAt,
+	})
 
 	// The log has to make clear WHY this connection received these permissions:
 	//   roles      what the token carried
@@ -379,12 +409,26 @@ func (s *Service) extraPlaceholders(claims *idp.Claims) map[string]string {
 	return extra
 }
 
+// sessionExpiry is when a NATS session authorized by a token expiring at tokenExpiry has to
+// end.
+//
+// It exists as its own function because two things need the same answer — the User JWT the
+// server enforces and the event the bus is told about — and a session whose announced expiry
+// disagreed with its enforced one would be worse than not announcing it at all.
+func sessionExpiry(tokenExpiry time.Time) time.Time {
+	if !tokenExpiry.IsZero() {
+		return tokenExpiry
+	}
+	// A token with no `exp` would otherwise produce an eternal session.
+	return time.Now().Add(maxUserJWTTTL)
+}
+
 // mintUserJWT assembles and signs the User JWT with the already-expanded permissions.
 func (s *Service) mintUserJWT(
 	userNkey string,
 	identity authz.Identity,
 	perms *authz.Permissions,
-	tokenExpiry time.Time,
+	expiresAt time.Time,
 ) (string, error) {
 	// The User JWT's Subject has to be the nkey the client presented: it is how the server
 	// ties the issued JWT to that specific connection.
@@ -432,12 +476,8 @@ func (s *Service) mintUserJWT(
 		}
 	}
 
-	// The NATS session must not outlive the token that authorized it.
-	if !tokenExpiry.IsZero() {
-		claims.Expires = tokenExpiry.Unix()
-	} else {
-		claims.Expires = time.Now().Add(maxUserJWTTTL).Unix()
-	}
+	// The NATS session must not outlive the token that authorized it (see sessionExpiry).
+	claims.Expires = expiresAt.Unix()
 
 	userJWT, err := claims.Encode(s.signingKey)
 	if err != nil {

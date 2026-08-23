@@ -140,6 +140,33 @@ type Config struct {
 	// not what a deployment wants.
 	OIDCAudience string
 
+	// EventsSubject is the subject an authentication event is published to. It is a PATTERN,
+	// expanded per event with the same {{placeholders}} permission templates use.
+	//
+	// It has no default, and empty DISABLES the whole feature. Both halves of that are
+	// deliberate: an existing deployment must not start announcing who logs in — with their
+	// name and email in the payload — to a subject nobody chose, and a default subject is
+	// exactly how that would happen.
+	EventsSubject string
+	// EventsStream is the JetStream stream that must capture EventsSubject. Required when
+	// events are on: the publisher waits for an ack, which is only meaningful if a stream is
+	// there to give one, and naming it is what lets startup check the subject is really covered.
+	EventsStream string
+	// EventsNATSURL is the URL the events connection uses. It defaults to NATSURL: the usual
+	// case is the same server, a different account.
+	EventsNATSURL string
+	// The events connection's own credentials. It is a SECOND connection, in the account where
+	// the consumers live — the callout's handler connects in the AUTH account, whose subject
+	// namespace application clients cannot see. Exactly one form, like the handler's.
+	EventsCreds    string
+	EventsUser     string
+	EventsPassword string
+	EventsNKeySeed string
+	// EventsNameClaim and EventsEmailClaim are the claim paths the event's name and email are
+	// read from. Empty means the OIDC standard names (`name`, `email`).
+	EventsNameClaim  string
+	EventsEmailClaim string
+
 	// LogLevel is the log level (debug, info, warn, error).
 	LogLevel string
 }
@@ -224,7 +251,23 @@ func load() (*Config, source, error) {
 	envOverride(&cfg.OIDCUsernameClaim, "CALLOUT_OIDC_USERNAME_CLAIM")
 	envOverride(&cfg.OIDCAudience, "CALLOUT_OIDC_AUDIENCE")
 	envOverride(&cfg.InboxMode, "CALLOUT_INBOX_MODE")
+	envOverride(&cfg.EventsSubject, "CALLOUT_EVENTS_SUBJECT")
+	envOverride(&cfg.EventsStream, "CALLOUT_EVENTS_STREAM")
+	envOverride(&cfg.EventsNATSURL, "CALLOUT_EVENTS_URL")
+	envOverride(&cfg.EventsCreds, "CALLOUT_EVENTS_CREDS")
+	envOverride(&cfg.EventsUser, "CALLOUT_EVENTS_USER")
+	envOverride(&cfg.EventsPassword, "CALLOUT_EVENTS_PASSWORD")
+	envOverride(&cfg.EventsNKeySeed, "CALLOUT_EVENTS_NKEY_SEED")
+	envOverride(&cfg.EventsNameClaim, "CALLOUT_EVENTS_NAME_CLAIM")
+	envOverride(&cfg.EventsEmailClaim, "CALLOUT_EVENTS_EMAIL_CLAIM")
 	envOverride(&cfg.LogLevel, "CALLOUT_LOG_LEVEL")
+
+	// The events connection almost always goes to the same server as the callout's own, just
+	// into a different account. Defaulting it keeps the common case to one setting, and an
+	// explicit value still wins for the deployment whose accounts live on separate clusters.
+	if cfg.EventsSubject != "" && cfg.EventsNATSURL == "" {
+		cfg.EventsNATSURL = cfg.NATSURL
+	}
 
 	if err := cfg.validate(); err != nil {
 		return nil, src, err
@@ -334,6 +377,63 @@ func (c *Config) validate() error {
 	default:
 		return fmt.Errorf("config: invalid inbox mode %q from %s (expected %s or %s)",
 			c.InboxMode, setting("CALLOUT_INBOX_MODE", "permissions.inbox_mode"), InboxModeHashed, InboxModePassthrough)
+	}
+
+	// --- Authentication events -------------------------------------------------------------
+	//
+	// The whole feature hangs off ONE setting, the subject. Everything else here is meaningless
+	// without it, so a value set while the subject is not is REFUSED rather than ignored: a
+	// deployment that configured a stream and a credential and then saw no events would have
+	// nothing to go on.
+	var eventsOff []string
+	offender := func(name, value string) {
+		if value != "" {
+			eventsOff = append(eventsOff, name)
+		}
+	}
+	if c.EventsSubject == "" {
+		offender(setting("CALLOUT_EVENTS_STREAM", "events.stream"), c.EventsStream)
+		offender(setting("CALLOUT_EVENTS_URL", "events.url"), c.EventsNATSURL)
+		offender(setting("CALLOUT_EVENTS_USER", "events.user"), c.EventsUser)
+		offender("CALLOUT_EVENTS_PASSWORD", c.EventsPassword)
+		offender("CALLOUT_EVENTS_CREDS", c.EventsCreds)
+		offender("CALLOUT_EVENTS_NKEY_SEED", c.EventsNKeySeed)
+		offender(setting("CALLOUT_EVENTS_NAME_CLAIM", "events.name_claim"), c.EventsNameClaim)
+		offender(setting("CALLOUT_EVENTS_EMAIL_CLAIM", "events.email_claim"), c.EventsEmailClaim)
+	} else {
+		// The stream is required, not optional: the publisher waits for an ack. Without a stream
+		// there is nothing to ack, every publish would time out, and the deployment would have
+		// asked for confirmed delivery and got a log full of failures.
+		require(setting("CALLOUT_EVENTS_STREAM", "events.stream"), c.EventsStream)
+
+		// The events connection is a SECOND connection, in the account where the consumers are.
+		// Its credential is separate from the handler's on purpose: the handler's account cannot
+		// see the application's subject namespace, and this one only ever needs to publish.
+		eventForms := 0
+		if c.EventsCreds != "" {
+			eventForms++
+		}
+		if c.EventsUser != "" || c.EventsPassword != "" {
+			eventForms++
+		}
+		if c.EventsNKeySeed != "" {
+			eventForms++
+		}
+		switch {
+		case eventForms == 0:
+			missing = append(missing, "one of CALLOUT_EVENTS_CREDS, CALLOUT_EVENTS_USER+CALLOUT_EVENTS_PASSWORD or CALLOUT_EVENTS_NKEY_SEED")
+		case eventForms > 1:
+			return errors.New("config: more than one events credential form is set; keep exactly one of CALLOUT_EVENTS_CREDS, CALLOUT_EVENTS_USER+CALLOUT_EVENTS_PASSWORD or CALLOUT_EVENTS_NKEY_SEED")
+		case c.EventsUser != "" && c.EventsPassword == "":
+			missing = append(missing, "CALLOUT_EVENTS_PASSWORD")
+		case c.EventsPassword != "" && c.EventsUser == "":
+			missing = append(missing, "CALLOUT_EVENTS_USER")
+		}
+	}
+
+	if len(eventsOff) > 0 {
+		return fmt.Errorf("config: the authentication event publisher is OFF (%s is not set) but these are configured, so nothing would read them: %s",
+			setting("CALLOUT_EVENTS_SUBJECT", "events.subject"), strings.Join(eventsOff, ", "))
 	}
 
 	if len(unexpected) > 0 {

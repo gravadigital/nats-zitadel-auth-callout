@@ -47,6 +47,7 @@ type File struct {
 	Server      FileServer      `yaml:"server"`
 	IDP         FileIDP         `yaml:"idp"`
 	Permissions FilePermissions `yaml:"permissions"`
+	Events      FileEvents      `yaml:"events"`
 	Log         FileLog         `yaml:"log"`
 }
 
@@ -107,6 +108,35 @@ type FilePermissions struct {
 	InboxMode string `yaml:"inbox_mode"`
 }
 
+// FileEvents describes the authentication event publisher.
+//
+// The whole section is optional and the subject is what turns it on. It gets its own section
+// rather than living under `server` because it describes a SECOND connection, to a different
+// account, with its own credential: nesting it under the server that is being served would
+// suggest they are the same connection, which is the one misunderstanding that costs a
+// deployment an afternoon here.
+type FileEvents struct {
+	// Subject is the subject pattern events are published to. Empty (or absent) means the
+	// publisher is off.
+	Subject string `yaml:"subject"`
+	// Stream is the JetStream stream that has to capture Subject.
+	Stream string `yaml:"stream"`
+	// URL is the NATS URL for the events connection. Defaults to server.url.
+	URL string `yaml:"url"`
+	// User is the events connection's user name (user/password form).
+	User string `yaml:"user"`
+	// NameClaim and EmailClaim are the claim paths the name and the email are read from.
+	// Default to the OIDC standard `name` and `email`.
+	NameClaim  string `yaml:"name_claim"`
+	EmailClaim string `yaml:"email_claim"`
+
+	// As in FileHandler, these exist ONLY so that writing a secret here is caught and named.
+	// They are never read into the Config.
+	Password string `yaml:"password"`
+	Creds    string `yaml:"creds"`
+	NKeySeed string `yaml:"nkey_seed"`
+}
+
 // FileLog holds logging settings.
 type FileLog struct {
 	Level string `yaml:"level"`
@@ -120,6 +150,9 @@ func (f *File) secretFields() []struct{ where, useInstead, value string } {
 		{"server.handler.password", "CALLOUT_HANDLER_PASSWORD", f.Server.Handler.Password},
 		{"server.handler.creds", "CALLOUT_HANDLER_CREDS", f.Server.Handler.Creds},
 		{"server.handler.nkey_seed", "CALLOUT_HANDLER_NKEY_SEED", f.Server.Handler.NKeySeed},
+		{"events.password", "CALLOUT_EVENTS_PASSWORD", f.Events.Password},
+		{"events.creds", "CALLOUT_EVENTS_CREDS", f.Events.Creds},
+		{"events.nkey_seed", "CALLOUT_EVENTS_NKEY_SEED", f.Events.NKeySeed},
 	}
 }
 
@@ -188,6 +221,13 @@ func (f *File) applyTo(cfg *Config) {
 	set(&cfg.Instance, f.Permissions.Instance)
 	set(&cfg.InboxMode, f.Permissions.InboxMode)
 
+	set(&cfg.EventsSubject, f.Events.Subject)
+	set(&cfg.EventsStream, f.Events.Stream)
+	set(&cfg.EventsNATSURL, f.Events.URL)
+	set(&cfg.EventsUser, f.Events.User)
+	set(&cfg.EventsNameClaim, f.Events.NameClaim)
+	set(&cfg.EventsEmailClaim, f.Events.EmailClaim)
+
 	set(&cfg.LogLevel, f.Log.Level)
 }
 
@@ -213,6 +253,12 @@ func (f *File) overriddenBy(envSet func(string) bool) []string {
 		{"permissions.rules_path", "CALLOUT_RULES_PATH", f.Permissions.RulesPath},
 		{"permissions.instance", "CALLOUT_INSTANCE", f.Permissions.Instance},
 		{"permissions.inbox_mode", "CALLOUT_INBOX_MODE", f.Permissions.InboxMode},
+		{"events.subject", "CALLOUT_EVENTS_SUBJECT", f.Events.Subject},
+		{"events.stream", "CALLOUT_EVENTS_STREAM", f.Events.Stream},
+		{"events.url", "CALLOUT_EVENTS_URL", f.Events.URL},
+		{"events.user", "CALLOUT_EVENTS_USER", f.Events.User},
+		{"events.name_claim", "CALLOUT_EVENTS_NAME_CLAIM", f.Events.NameClaim},
+		{"events.email_claim", "CALLOUT_EVENTS_EMAIL_CLAIM", f.Events.EmailClaim},
 		{"log.level", "CALLOUT_LOG_LEVEL", f.Log.Level},
 	}
 
