@@ -96,6 +96,9 @@ type FileIDP struct {
 	UsernameClaim string `yaml:"username_claim"`
 	// Audience additionally requires the token's `aud` to contain this value (oidc mode).
 	Audience string `yaml:"audience"`
+	// Enrich is how much userinfo is consulted for what the token does not carry: none,
+	// username or profile.
+	Enrich string `yaml:"enrich"`
 }
 
 // FilePermissions describes how permissions are derived.
@@ -216,6 +219,7 @@ func (f *File) applyTo(cfg *Config) {
 	set(&cfg.OIDCRolesClaim, f.IDP.RolesClaim)
 	set(&cfg.OIDCUsernameClaim, f.IDP.UsernameClaim)
 	set(&cfg.OIDCAudience, f.IDP.Audience)
+	set(&cfg.IDPEnrich, f.IDP.Enrich)
 
 	set(&cfg.RulesPath, f.Permissions.RulesPath)
 	set(&cfg.Instance, f.Permissions.Instance)
@@ -250,6 +254,7 @@ func (f *File) overriddenBy(envSet func(string) bool) []string {
 		{"idp.roles_claim", "CALLOUT_OIDC_ROLES_CLAIM", f.IDP.RolesClaim},
 		{"idp.username_claim", "CALLOUT_OIDC_USERNAME_CLAIM", f.IDP.UsernameClaim},
 		{"idp.audience", "CALLOUT_OIDC_AUDIENCE", f.IDP.Audience},
+		{"idp.enrich", "CALLOUT_IDP_ENRICH", f.IDP.Enrich},
 		{"permissions.rules_path", "CALLOUT_RULES_PATH", f.Permissions.RulesPath},
 		{"permissions.instance", "CALLOUT_INSTANCE", f.Permissions.Instance},
 		{"permissions.inbox_mode", "CALLOUT_INBOX_MODE", f.Permissions.InboxMode},

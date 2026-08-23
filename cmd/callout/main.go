@@ -175,7 +175,16 @@ func run() error {
 			Str("subject", cfg.EventsSubject).
 			Str("stream", cfg.EventsStream).
 			Str("nats", cfg.EventsNATSURL).
+			Str("enrich", cfg.IDPEnrich).
 			Msg("authentication events enabled")
+		if cfg.IDPEnrich != config.IDPEnrichProfile && cfg.IDPMode != config.IDPModeMock {
+			// The single most likely disappointment with this feature: the events arrive, and
+			// every one of them has an empty name and email. An access token is not an ID token,
+			// and Zitadel — among others — keeps both claims out of it.
+			log.Warn().Msg("authentication events will carry a name and email only if the ACCESS TOKEN does: " +
+				"many providers (Zitadel included) keep them out of it. Set CALLOUT_IDP_ENRICH=profile to fill " +
+				"them from userinfo instead (one cached call per user)")
+		}
 	}
 	if cfg.IDPMode == config.IDPModeMock {
 		log.Warn().Msg("IdP in MOCK mode: any well-formed token is accepted. Do not use in production.")
@@ -633,6 +642,7 @@ func buildVerifier(ctx context.Context, cfg *config.Config, log *zerolog.Logger)
 		verifier, err := idp.NewOIDC(ctx, cfg.OIDCIssuerURL, cfg.OIDCRolesClaim,
 			idp.WithOIDCAudience(cfg.OIDCAudience),
 			idp.WithOIDCUsernameClaim(cfg.OIDCUsernameClaim),
+			idp.WithOIDCEnrichment(idp.EnrichMode(cfg.IDPEnrich)),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("initialize OIDC: %w", err)
@@ -653,7 +663,7 @@ func buildVerifier(ctx context.Context, cfg *config.Config, log *zerolog.Logger)
 	default:
 		verifier, err := idp.NewZitadel(ctx, cfg.ZitadelIssuerURL,
 			idp.WithProjectID(cfg.ZitadelProjectID),
-			idp.WithUsernameEnrichment(true),
+			idp.WithEnrichment(idp.EnrichMode(cfg.IDPEnrich)),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("initialize Zitadel: %w", err)

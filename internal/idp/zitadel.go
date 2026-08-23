@@ -24,6 +24,11 @@ const (
 	claimRolesProjectFmt = "urn:zitadel:iam:org:project:%s:roles"
 	// claimPreferredUsername is the user's human-readable name.
 	claimPreferredUsername = "preferred_username"
+	// claimName and claimEmail are the OIDC standard profile claims. Zitadel does not put them
+	// in an access token, so in practice they arrive through the userinfo enrichment — but a
+	// deployment whose provider does include them pays nothing for it.
+	claimName  = "name"
+	claimEmail = "email"
 )
 
 // jwksRefreshInterval is how often Zitadel's JWKS is refreshed in the background.
@@ -49,8 +54,8 @@ const jwksRefreshInterval = 15 * time.Minute
 // enough to pick up the new key, and from then on the cache serves it.
 const jwksRefetchCooldown = time.Minute
 
-// userinfoTimeout bounds the call to /oidc/v1/userinfo. It is an optional enrichment: if it
-// is slow or fails, authentication proceeds without a username.
+// userinfoTimeout bounds one call to the userinfo endpoint. The enrichment is optional: if it
+// is slow or fails, authentication proceeds with whatever the token carried.
 const userinfoTimeout = 3 * time.Second
 
 // errUnknownKeyIDFragment is the fragment jwx uses to report that the token's `kid` is not in
@@ -73,10 +78,13 @@ type Zitadel struct {
 	cache      *jwk.Cache
 	jwksURL    string
 	httpClient *http.Client
-	// enrichUsername requests /oidc/v1/userinfo when the token carries no human-readable
-	// name. Machine user tokens usually do not carry one, and the name is what makes
-	// `nats server report connections` readable.
-	enrichUsername bool
+	// enrich says how much to ask userinfo for when the token does not carry it. It defaults to
+	// EnrichUsername: machine user tokens usually carry no username, and the username is what
+	// makes `nats server report connections` readable.
+	enrich EnrichMode
+	// userinfo reads the userinfo endpoint discovered from the provider, with a per-subject
+	// cache. It is nil when the provider's discovery document declares no such endpoint.
+	userinfo *userinfoFetcher
 
 	// now is the cooldown's time source. It exists so tests can move the clock without
 	// sleeping; in production it is time.Now.
@@ -99,9 +107,13 @@ func WithProjectID(projectID string) ZitadelOption {
 	return func(z *Zitadel) { z.projectID = projectID }
 }
 
-// WithUsernameEnrichment enables querying userinfo when the token carries no name.
-func WithUsernameEnrichment(enabled bool) ZitadelOption {
-	return func(z *Zitadel) { z.enrichUsername = enabled }
+// WithEnrichment selects how much userinfo is consulted for what the token does not carry.
+func WithEnrichment(mode EnrichMode) ZitadelOption {
+	return func(z *Zitadel) {
+		if mode.IsValid() {
+			z.enrich = mode
+		}
+	}
 }
 
 // withClock replaces the refetch cooldown's time source. Tests only: it allows exercising the
@@ -134,78 +146,87 @@ func NewZitadel(ctx context.Context, issuerURL string, opts ...ZitadelOption) (*
 	issuerURL = strings.TrimSuffix(issuerURL, "/")
 
 	z := &Zitadel{
-		issuer:         issuerURL,
-		httpClient:     &http.Client{Timeout: 10 * time.Second},
-		enrichUsername: true,
-		now:            time.Now,
+		issuer:     issuerURL,
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+		enrich:     EnrichUsername,
+		now:        time.Now,
 	}
 	for _, opt := range opts {
 		opt(z)
 	}
 
-	jwksURL, err := z.discoverJWKS(ctx)
+	endpoints, err := discoverEndpoints(ctx, z.httpClient, z.issuer, &z.issuer)
 	if err != nil {
 		return nil, err
 	}
-	z.jwksURL = jwksURL
+	z.jwksURL = endpoints.JWKS
+	// The endpoint comes from the discovery document rather than a hardcoded path: it is what
+	// the provider says it is, and a self-hosted instance behind a prefix is then not a special
+	// case.
+	z.userinfo = newUserinfoFetcher(endpoints.Userinfo, z.httpClient, userinfoTimeout)
 
 	cache := jwk.NewCache(ctx)
-	if err := cache.Register(jwksURL,
+	if err := cache.Register(z.jwksURL,
 		jwk.WithMinRefreshInterval(jwksRefreshInterval),
 		jwk.WithHTTPClient(z.httpClient),
 	); err != nil {
-		return nil, fmt.Errorf("idp: register JWKS %q: %w", jwksURL, err)
+		return nil, fmt.Errorf("idp: register JWKS %q: %w", z.jwksURL, err)
 	}
 	// First fetch at startup: if the JWKS cannot be read, better to fail here than to reject
 	// every connection once up.
-	if _, err := cache.Refresh(ctx, jwksURL); err != nil {
-		return nil, fmt.Errorf("idp: read JWKS %q: %w", jwksURL, err)
+	if _, err := cache.Refresh(ctx, z.jwksURL); err != nil {
+		return nil, fmt.Errorf("idp: read JWKS %q: %w", z.jwksURL, err)
 	}
 	z.cache = cache
 
 	return z, nil
 }
 
-// discoverJWKS resolves jwks_uri through the OpenID Connect well-known document.
-func (z *Zitadel) discoverJWKS(ctx context.Context) (string, error) {
-	return discoverJWKSURL(ctx, z.httpClient, z.issuer, &z.issuer)
+// endpoints are the addresses read from the OpenID Connect discovery document.
+type endpoints struct {
+	// JWKS is jwks_uri: where the signing keys live.
+	JWKS string
+	// Userinfo is userinfo_endpoint. It may be empty — the spec makes it RECOMMENDED, not
+	// required — and an empty one simply disables the enrichment.
+	Userinfo string
 }
 
-// discoverJWKSURL resolves jwks_uri through the OpenID Connect well-known document.
+// discoverEndpoints reads the OpenID Connect well-known document.
 //
 // issuerOut, when non-nil, receives the issuer the document DECLARES. That value wins over the
 // URL used to reach it: tokens are validated against the declared issuer, and the two legimately
 // differ behind a proxy or on an internal host.
-func discoverJWKSURL(ctx context.Context, client *http.Client, issuerURL string, issuerOut *string) (string, error) {
+func discoverEndpoints(ctx context.Context, client *http.Client, issuerURL string, issuerOut *string) (endpoints, error) {
 	url := strings.TrimSuffix(issuerURL, "/") + "/.well-known/openid-configuration"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", fmt.Errorf("idp: build discovery request: %w", err)
+		return endpoints{}, fmt.Errorf("idp: build discovery request: %w", err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("idp: OIDC discovery at %q: %w", url, err)
+		return endpoints{}, fmt.Errorf("idp: OIDC discovery at %q: %w", url, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("idp: OIDC discovery at %q returned %s", url, resp.Status)
+		return endpoints{}, fmt.Errorf("idp: OIDC discovery at %q returned %s", url, resp.Status)
 	}
 
 	var doc struct {
-		Issuer  string `json:"issuer"`
-		JWKSURI string `json:"jwks_uri"`
+		Issuer   string `json:"issuer"`
+		JWKSURI  string `json:"jwks_uri"`
+		Userinfo string `json:"userinfo_endpoint"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
-		return "", fmt.Errorf("idp: parse discovery from %q: %w", url, err)
+		return endpoints{}, fmt.Errorf("idp: parse discovery from %q: %w", url, err)
 	}
 	if doc.JWKSURI == "" {
-		return "", fmt.Errorf("idp: the discovery document at %q carries no jwks_uri", url)
+		return endpoints{}, fmt.Errorf("idp: the discovery document at %q carries no jwks_uri", url)
 	}
 	if doc.Issuer != "" && issuerOut != nil {
 		*issuerOut = strings.TrimSuffix(doc.Issuer, "/")
 	}
-	return doc.JWKSURI, nil
+	return endpoints{JWKS: doc.JWKSURI, Userinfo: doc.Userinfo}, nil
 }
 
 // VerifyToken validates the token's signature, issuer and lifetime, and extracts the claims.
@@ -254,14 +275,48 @@ func (z *Zitadel) VerifyToken(ctx context.Context, token string) (*Claims, error
 	if username, ok := stringClaim(parsed, claimPreferredUsername); ok {
 		claims.Username = username
 	}
-	if claims.Username == "" && z.enrichUsername {
-		// Best-effort: the username is for readability, not for authorization.
-		if username, err := z.fetchUsername(ctx, token); err == nil {
-			claims.Username = username
-		}
+	// Zitadel does not put these in an access token, so they are usually absent here and filled
+	// by the enrichment below. Reading them first still matters: it keeps the call from
+	// happening at all for a provider that does include them.
+	if name, ok := stringClaim(parsed, claimName); ok {
+		claims.Name = name
+	}
+	if email, ok := stringClaim(parsed, claimEmail); ok {
+		claims.Email = email
 	}
 
+	z.enrichClaims(ctx, claims, token)
+
 	return claims, nil
+}
+
+// enrichClaims fills from userinfo what the token did not carry.
+//
+// It is best-effort in every mode: the fields it fills are for readability and for the
+// authentication event, so a provider that is slow or does not answer must never turn into a
+// failed authentication. Nothing about authorization is ever read from here.
+func (z *Zitadel) enrichClaims(ctx context.Context, claims *Claims, token string) {
+	switch z.enrich {
+	case EnrichUsername:
+		// The narrow mode: one call, only for a token with no username at all, and it takes
+		// only the username. Keeping it narrow is what makes it safe to have on by default.
+		if claims.Username != "" {
+			return
+		}
+		if fetched, ok := z.userinfo.fetch(ctx, claims.Subject, token); ok {
+			claims.Username = fetched.PreferredUsername
+			if claims.Username == "" {
+				claims.Username = fetched.Name
+			}
+		}
+	case EnrichProfile:
+		if !needsEnrichment(claims) {
+			return
+		}
+		if fetched, ok := z.userinfo.fetch(ctx, claims.Subject, token); ok {
+			fetched.applyTo(claims)
+		}
+	}
 }
 
 // parse validates the token against a specific JWKS. It is separate from VerifyToken because
@@ -344,42 +399,6 @@ func stringClaim(token jwt.Token, name string) (string, bool) {
 	}
 	value, ok := raw.(string)
 	return value, ok
-}
-
-// fetchUsername requests /oidc/v1/userinfo with the client's token to obtain a
-// human-readable name. It is only used when the token carries no `preferred_username` — the
-// typical case for a machine user.
-func (z *Zitadel) fetchUsername(ctx context.Context, token string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, userinfoTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, z.issuer+"/oidc/v1/userinfo", nil)
-	if err != nil {
-		return "", fmt.Errorf("idp: build userinfo request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := z.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("idp: userinfo: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("idp: userinfo returned %s", resp.Status)
-	}
-
-	var info struct {
-		PreferredUsername string `json:"preferred_username"`
-		Name              string `json:"name"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return "", fmt.Errorf("idp: parse userinfo: %w", err)
-	}
-	if info.PreferredUsername != "" {
-		return info.PreferredUsername, nil
-	}
-	return info.Name, nil
 }
 
 // Compile-time check.

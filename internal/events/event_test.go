@@ -193,3 +193,33 @@ func TestEventSurvivesMissingClaims(t *testing.T) {
 		t.Errorf("roles = %#v, want empty", event.Roles)
 	}
 }
+
+func TestEventFallsBackToTheEnrichedClaims(t *testing.T) {
+	in := sampleAuthentication()
+	// What a Zitadel access token actually looks like: a username, no name, no email. The
+	// verifier filled the two normalized fields from userinfo.
+	in.Claims.Raw = map[string]any{"preferred_username": "ana"}
+	in.Claims.Name = "Ana Pérez"
+	in.Claims.Email = "ana@example.com"
+
+	event := newEvent(in, DefaultNameClaim, DefaultEmailClaim)
+	if event.Name != "Ana Pérez" {
+		t.Errorf("name = %q, want the enriched name", event.Name)
+	}
+	if event.Email != "ana@example.com" {
+		t.Errorf("email = %q, want the enriched email", event.Email)
+	}
+}
+
+func TestEventPrefersTheConfiguredClaimPathOverTheEnrichedValue(t *testing.T) {
+	in := sampleAuthentication()
+	// A deployment that declared where the values live has said something specific about its
+	// provider; that beats the generic normalization.
+	in.Claims.Raw = map[string]any{"profile": map[string]any{"mail": "declared@example.com"}}
+	in.Claims.Email = "enriched@example.com"
+
+	event := newEvent(in, "profile.full_name", "profile.mail")
+	if event.Email != "declared@example.com" {
+		t.Errorf("email = %q, want the declared claim path to win", event.Email)
+	}
+}

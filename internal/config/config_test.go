@@ -34,6 +34,7 @@ func loadWith(t *testing.T, env map[string]string) (*Config, error) {
 		"CALLOUT_INSTANCE", "CALLOUT_IDP_MODE", "CALLOUT_ZITADEL_ISSUER_URL",
 		"CALLOUT_ZITADEL_PROJECT_ID", "CALLOUT_OIDC_ISSUER_URL", "CALLOUT_OIDC_ROLES_CLAIM",
 		"CALLOUT_OIDC_USERNAME_CLAIM", "CALLOUT_OIDC_AUDIENCE", "CALLOUT_INBOX_MODE",
+		"CALLOUT_IDP_ENRICH",
 		"CALLOUT_EVENTS_SUBJECT", "CALLOUT_EVENTS_STREAM", "CALLOUT_EVENTS_URL",
 		"CALLOUT_EVENTS_USER", "CALLOUT_EVENTS_PASSWORD", "CALLOUT_EVENTS_CREDS",
 		"CALLOUT_EVENTS_NKEY_SEED", "CALLOUT_EVENTS_NAME_CLAIM", "CALLOUT_EVENTS_EMAIL_CLAIM",
@@ -433,5 +434,66 @@ func TestEventsURLCanDifferFromTheServerURL(t *testing.T) {
 	}
 	if cfg.EventsNATSURL != "nats://events.internal:4222" {
 		t.Errorf("EventsNATSURL = %q, want the explicit events URL", cfg.EventsNATSURL)
+	}
+}
+
+// --- userinfo enrichment -----------------------------------------------------------------
+
+func TestEnrichmentDefaultsPerIdPMode(t *testing.T) {
+	// The defaults exist to keep every deployment behaving exactly as it did before the setting
+	// existed: zitadel already asked userinfo for a missing username, and nothing else asked at
+	// all. A different default would change authentication behaviour on upgrade.
+	cases := map[string]string{
+		IDPModeZitadel: IDPEnrichUsername,
+		IDPModeOIDC:    IDPEnrichNone,
+		IDPModeMock:    IDPEnrichNone,
+	}
+	for mode, want := range cases {
+		t.Run(mode, func(t *testing.T) {
+			env := baseEnv()
+			env["CALLOUT_IDP_MODE"] = mode
+			switch mode {
+			case IDPModeZitadel:
+				env["CALLOUT_ZITADEL_ISSUER_URL"] = "https://id.example.com"
+			case IDPModeOIDC:
+				env["CALLOUT_OIDC_ISSUER_URL"] = "https://id.example.com"
+				env["CALLOUT_OIDC_ROLES_CLAIM"] = "roles"
+			}
+			cfg, err := loadWith(t, env)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if cfg.IDPEnrich != want {
+				t.Errorf("IDPEnrich = %q, want %q", cfg.IDPEnrich, want)
+			}
+		})
+	}
+}
+
+func TestEnrichmentIsValidated(t *testing.T) {
+	env := baseEnv()
+	env["CALLOUT_IDP_ENRICH"] = "everything"
+
+	_, err := loadWith(t, env)
+	if err == nil {
+		t.Fatal("load succeeded with an unknown enrichment level")
+	}
+	// Silently treating an unknown value as "none" would leave a deployment wondering why its
+	// events have no names.
+	if !strings.Contains(err.Error(), "CALLOUT_IDP_ENRICH") {
+		t.Errorf("error %q does not name the setting", err)
+	}
+}
+
+func TestEnrichmentCanBeSetToProfile(t *testing.T) {
+	env := baseEnv()
+	env["CALLOUT_IDP_ENRICH"] = IDPEnrichProfile
+
+	cfg, err := loadWith(t, env)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.IDPEnrich != IDPEnrichProfile {
+		t.Errorf("IDPEnrich = %q, want %q", cfg.IDPEnrich, IDPEnrichProfile)
 	}
 }

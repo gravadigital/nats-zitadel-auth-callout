@@ -136,14 +136,29 @@ func newEvent(in Authentication, nameClaim, emailClaim string) Event {
 		// another goroutine.
 		event.Roles = append(event.Roles, in.Claims.Roles...)
 	}
-	if name, ok := in.Claims.ClaimString(nameClaim); ok {
-		event.Name = name
+	// Three sources, in order of how specific they are to this deployment:
+	//
+	//  1. the configured claim path, for a provider that puts the value somewhere non-standard;
+	//  2. the normalized claim, which the verifier read from the token's standard claim or
+	//     filled from userinfo (see CALLOUT_IDP_ENRICH);
+	//  3. for the name only, the username — a name field left empty while a perfectly good
+	//     username exists helps nobody.
+	if in.Claims != nil {
+		if name, ok := in.Claims.ClaimString(nameClaim); ok {
+			event.Name = name
+		}
+		if event.Name == "" {
+			event.Name = in.Claims.Name
+		}
+		if email, ok := in.Claims.ClaimString(emailClaim); ok {
+			event.Email = email
+		}
+		if event.Email == "" {
+			event.Email = in.Claims.Email
+		}
 	}
 	if event.Name == "" {
 		event.Name = in.Identity.Username
-	}
-	if email, ok := in.Claims.ClaimString(emailClaim); ok {
-		event.Email = email
 	}
 	return event
 }

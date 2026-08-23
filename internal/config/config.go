@@ -38,6 +38,18 @@ const (
 	ServerModeConfig = "config"
 )
 
+// Userinfo enrichment levels. They mirror idp.EnrichMode; config carries strings so this
+// package keeps depending on nothing.
+const (
+	// IDPEnrichNone never calls userinfo: everything comes from the token.
+	IDPEnrichNone = "none"
+	// IDPEnrichUsername calls it only for a token with no username, and takes only that.
+	IDPEnrichUsername = "username"
+	// IDPEnrichProfile additionally fills the name and the email. It is what an authentication
+	// event needs from a provider that keeps them out of access tokens.
+	IDPEnrichProfile = "profile"
+)
+
 // Inbox derivation modes.
 const (
 	// InboxModeHashed scopes each client to `_INBOX.<hash(user-id)>`. It isolates replies
@@ -139,6 +151,22 @@ type Config struct {
 	// it any token the provider issued for ANY of its clients verifies here, which is usually
 	// not what a deployment wants.
 	OIDCAudience string
+
+	// IDPEnrich says how much the verifier may ask the provider's userinfo endpoint for, when
+	// the token itself does not carry it: `none`, `username` or `profile`.
+	//
+	// It is a cost, which is why it is a setting: userinfo is an HTTP call on the path that
+	// authenticates a connection. It is cached per subject, so the cost is one call per user per
+	// cache window rather than one per connection.
+	//
+	// The default depends on the IdP mode, to keep every existing deployment behaving exactly as
+	// it did: `username` for zitadel (machine user tokens carry no username, and a readable name
+	// in `nats server report connections` is worth one rare call), `none` for oidc and mock.
+	//
+	// `profile` is what a deployment publishing authentication events sets: an access token is
+	// not an ID token, and Zitadel — among others — keeps `name` and `email` out of it, so
+	// userinfo is the only standards-compliant place to get them.
+	IDPEnrich string
 
 	// EventsSubject is the subject an authentication event is published to. It is a PATTERN,
 	// expanded per event with the same {{placeholders}} permission templates use.
@@ -250,6 +278,7 @@ func load() (*Config, source, error) {
 	envOverride(&cfg.OIDCRolesClaim, "CALLOUT_OIDC_ROLES_CLAIM")
 	envOverride(&cfg.OIDCUsernameClaim, "CALLOUT_OIDC_USERNAME_CLAIM")
 	envOverride(&cfg.OIDCAudience, "CALLOUT_OIDC_AUDIENCE")
+	envOverride(&cfg.IDPEnrich, "CALLOUT_IDP_ENRICH")
 	envOverride(&cfg.InboxMode, "CALLOUT_INBOX_MODE")
 	envOverride(&cfg.EventsSubject, "CALLOUT_EVENTS_SUBJECT")
 	envOverride(&cfg.EventsStream, "CALLOUT_EVENTS_STREAM")
@@ -261,6 +290,17 @@ func load() (*Config, source, error) {
 	envOverride(&cfg.EventsNameClaim, "CALLOUT_EVENTS_NAME_CLAIM")
 	envOverride(&cfg.EventsEmailClaim, "CALLOUT_EVENTS_EMAIL_CLAIM")
 	envOverride(&cfg.LogLevel, "CALLOUT_LOG_LEVEL")
+
+	// The enrichment default depends on the IdP mode, so it can only be decided once every source
+	// has been read. Both values reproduce exactly what the service did before the setting
+	// existed, so no deployment changes behaviour by upgrading.
+	if cfg.IDPEnrich == "" {
+		if cfg.IDPMode == IDPModeZitadel {
+			cfg.IDPEnrich = IDPEnrichUsername
+		} else {
+			cfg.IDPEnrich = IDPEnrichNone
+		}
+	}
 
 	// The events connection almost always goes to the same server as the callout's own, just
 	// into a different account. Defaulting it keeps the common case to one setting, and an
@@ -370,6 +410,14 @@ func (c *Config) validate() error {
 	default:
 		return fmt.Errorf("config: invalid IdP mode %q from %s (expected %s, %s or %s)",
 			c.IDPMode, setting("CALLOUT_IDP_MODE", "idp.mode"), IDPModeZitadel, IDPModeOIDC, IDPModeMock)
+	}
+
+	switch c.IDPEnrich {
+	case IDPEnrichNone, IDPEnrichUsername, IDPEnrichProfile:
+	default:
+		return fmt.Errorf("config: invalid userinfo enrichment %q from %s (expected %s, %s or %s)",
+			c.IDPEnrich, setting("CALLOUT_IDP_ENRICH", "idp.enrich"),
+			IDPEnrichNone, IDPEnrichUsername, IDPEnrichProfile)
 	}
 
 	switch c.InboxMode {
