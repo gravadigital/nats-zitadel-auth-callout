@@ -35,6 +35,7 @@ auth-callout verify --client-user NAME --client-password ... # config mode
 | [Anything with KV times out](#anything-with-kv-times-out) | JetStream off, or a missing subject |
 | [The service will not start](#the-service-will-not-start) | configuration rejected on purpose |
 | [Changes to the config do nothing](#changes-to-the-config-do-nothing) | an old process, or a non-reloadable field |
+| [No authentication events, or nameless ones](#no-authentication-events-or-nameless-ones) | the publisher is off, denied, or reading a token that has no name |
 
 ---
 
@@ -106,6 +107,13 @@ The bypass check connects as a client while the callout is not serving. A correc
 deployment **refuses** that connection; one that accepts it is bypassing. Note this check only
 works while the service is stopped — once it is answering, a bypassing client and an authorized
 one are indistinguishable.
+
+**Config mode: check `allowed_accounts` too.** It restricts which accounts' users are DELEGATED to
+the callout, and it names the account a client CONNECTS AS — not the account the minted User JWT
+places it in. Clients connect as a user of the callout's own account (`AUTH` in the examples) and
+are placed into the application account, so naming the application account there stops delegating
+them: the server authorizes each client directly, with its own permissions, and the callout never
+fires. `auth-callout verify --client-user … --client-password …` catches it.
 
 ## `request` returns nothing and exits 0
 
@@ -185,6 +193,36 @@ server restart — `nats-server --signal reload` does not pick it up.
 
 **Rules and templates are read at startup.** Changing them requires restarting the callout (but
 not the NATS server).
+
+---
+
+## No authentication events, or nameless ones
+
+Only when [authentication events](events.md) are turned on. Four distinct failures, in the order
+they are worth checking.
+
+**Nothing at all, and nothing in the log.** The publisher is off: `CALLOUT_EVENTS_SUBJECT` is
+unset. Startup logs `authentication events enabled` with the subject and stream when it is on, so
+its absence is the answer.
+
+**The service will not start, naming the stream.** Either the stream does not exist, the
+credential may not ask about it (it needs pub on `$JS.API.STREAM.INFO.<stream>` — a denied request
+gets no responder rather than a refusal), or the stream's subject filter does not match the
+configured subject. All three are refusals on purpose: a stream that does not capture the subject
+reports *nothing* at runtime, and the events would accumulate nowhere.
+
+**Nothing arrives, and the log says `permissions violation for publish`.** The events credential
+is missing publish on the subject. A denied publish in NATS is asynchronous — the call returns
+successfully and the server drops the message — which is exactly why the service logs the
+connection's out-of-band errors. Note the account: that credential belongs where the *consumers*
+are, not in the callout's AUTH account. In config mode, also check `allowed_accounts`, because
+without it every account is delegated to the callout, the publisher's own connection included.
+
+**Events arrive with an empty `name` and `email`.** The access token does not carry those claims.
+An access token is not an ID token, and Zitadel keeps both out of it even with the `profile email`
+scopes granted. Set `CALLOUT_IDP_ENRICH=profile` to fill them from userinfo (cached per identity).
+Startup warns about exactly this when the events are on without it. A machine user has no email at
+all, and that stays empty.
 
 ---
 

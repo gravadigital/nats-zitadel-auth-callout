@@ -162,6 +162,13 @@ introspection call per connection, so revocation in Zitadel is not observed unti
 `exp`. The minted NATS session expires with the token, so the exposure is bounded by the token
 lifetime you configure in Zitadel — that setting is what to tune if this matters to you.
 
+**An access token is not an ID token.** Zitadel's JWT access tokens carry `preferred_username`
+and the project roles, but neither `name` nor `email` — even when the token was requested with the
+`profile email` scopes. Those claims live in userinfo. It matters if you publish
+[authentication events](events.md) and want them to name a person: set `CALLOUT_IDP_ENRICH=profile`
+and the verifier fills them from userinfo, cached per identity. A machine user has a `name` there
+and no email at all.
+
 **Key rotation needs no restart.** The JWKS is refreshed periodically, and a token signed with an
 unknown key triggers one immediate, rate-limited refetch. The rate limit exists because that path
 runs *before* authentication: without it, a token with a made-up key id would let anyone force a

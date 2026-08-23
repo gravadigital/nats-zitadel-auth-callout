@@ -15,6 +15,10 @@ An application with a `demo` service and three kinds of caller:
 
 There is **no catch-all**, so a valid token whose role is not listed does not connect.
 
+The templates also show, commented out, how a role is granted the
+[authentication events](../docs/events.md) — it is an ordinary subject permission, on the admin
+template rather than the general one because the payload names everyone who signs in.
+
 The two person roles are the point of the example: **same service, same bucket, different
 permissions by role** — and within a role, scoped per user by the NATS server rather than by
 the application.

@@ -87,6 +87,20 @@ template says, which is the scoping bypass this design exists to prevent.
 The [examples](../examples/) use `<instance>.<user-id>.<service>.<method>`. That is one workable
 convention, not a requirement.
 
+## Announcing an authentication
+
+The callout is the only component that knows an authentication happened: the NATS server sees a
+connection, the identity provider sees a token request. So it can optionally publish one event per
+authenticated connection — who connected, with which roles, when, and until when — on a subject
+you choose.
+
+It does not change the shape of anything above. The event goes out *after* the server already has
+its answer, from another goroutine, on a second connection into the account your consumers live
+in; nothing about it can delay or refuse a connection. Consuming it is an ordinary subject
+permission, granted per role by the same templates as everything else.
+
+It is off unless configured. See [events](events.md).
+
 ## Why the caller's id belongs in the subject
 
 A pattern worth understanding even if you choose differently: when the caller's user id is part

@@ -2,6 +2,7 @@ package callout
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -288,4 +289,89 @@ func publicKeyOf(kp nkeys.KeyPair) (string, error) {
 		return "", errors.New("nil keypair")
 	}
 	return kp.PublicKey()
+}
+
+// TestConfigModeAllowedAccountsNamesTheConnectingAccount pins which account `allowed_accounts`
+// is about, because getting it wrong produces an authorization BYPASS and says nothing.
+//
+// In config mode the setting restricts which accounts' users are DELEGATED to the callout — the
+// account a client CONNECTS AS, not the one the minted User JWT places it in. Clients connect as
+// a user of the AUTH account and are placed into APP, so naming APP here stops delegating them:
+// the server then authorizes the client directly, with its own permissions, and the callout never
+// fires.
+//
+// The probe is the same one `auth-callout verify` uses: connect as a client while nothing is
+// serving the callout. A correctly wired deployment must REFUSE that connection.
+func TestConfigModeAllowedAccountsNamesTheConnectingAccount(t *testing.T) {
+	issuerKP, err := nkeys.CreateAccount()
+	if err != nil {
+		t.Fatalf("create issuer key: %v", err)
+	}
+	issuerPub, err := issuerKP.PublicKey()
+	if err != nil {
+		t.Fatalf("issuer pubkey: %v", err)
+	}
+	xkey, err := nkeys.CreateCurveKeys()
+	if err != nil {
+		t.Fatalf("create xkey: %v", err)
+	}
+	xkeyPub, err := xkey.PublicKey()
+	if err != nil {
+		t.Fatalf("xkey pubkey: %v", err)
+	}
+
+	serverWith := func(t *testing.T, allowedAccount string) string {
+		t.Helper()
+		return startServerFromConf(t, fmt.Sprintf(`
+port: -1
+server_name: allowed-accounts-test
+
+jetstream { store_dir: %q }
+
+accounts {
+  AUTH: {
+    users: [
+      { user: handler, password: handler-pass }
+      { user: client, password: client-pass,
+        permissions: { publish: { deny: ">" }, subscribe: { deny: ">" } } }
+    ]
+  }
+  APP: { jetstream: enabled }
+}
+
+authorization {
+  timeout: 1
+  auth_callout {
+    issuer: %q
+    account: AUTH
+    auth_users: [ handler ]
+    xkey: %q
+    allowed_accounts: [ %s ]
+  }
+}
+`, t.TempDir(), issuerPub, xkeyPub, allowedAccount))
+	}
+
+	t.Run("the account clients connect as", func(t *testing.T) {
+		url := serverWith(t, "AUTH")
+		nc, err := nats.Connect(url, nats.UserInfo("client", "client-pass"), nats.Timeout(waitFor))
+		if err == nil {
+			nc.Close()
+			t.Fatal("the client connected while nothing served the callout: it is NOT being delegated")
+		}
+	})
+
+	t.Run("the account clients land in", func(t *testing.T) {
+		url := serverWith(t, "APP")
+		nc, err := nats.Connect(url, nats.UserInfo("client", "client-pass"), nats.Timeout(waitFor))
+		if err != nil {
+			// If NATS ever changes this, the examples and docs that warn about it should be
+			// revisited rather than left warning about something that no longer happens.
+			t.Skipf("naming the target account no longer bypasses the callout (%v) — revisit examples/config-mode/nats-server.conf", err)
+		}
+		nc.Close()
+		// Documented, not lamented: this is the trap, and `verify` is what catches it in a real
+		// deployment.
+		t.Log("naming the target account bypasses the callout entirely — this is why examples/config-mode/nats-server.conf says AUTH")
+	})
 }

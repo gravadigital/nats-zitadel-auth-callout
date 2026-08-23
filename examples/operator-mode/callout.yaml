@@ -32,6 +32,20 @@ permissions:
   # isolation.
   inbox_mode: hashed
 
+# --- Authentication events (OPTIONAL) --------------------------------------------------------
+# One event per authenticated connection, carrying the identity that was just verified. The whole
+# section is optional and the SUBJECT is what turns it on — a deployment must not start
+# announcing who signs in, with their name and email, because it upgraded.
+#
+# The publisher connects SEPARATELY, into the account the consumers live in: the callout's own
+# connection is in the AUTH account, whose subject namespace no application client can see. See
+# docs/events.md for the stream to create and the three permissions to grant.
+#events:
+#  subject: "{{instance}}.events.auth"
+#  stream: AUTH_EVENTS
+#  # Its credential is a secret and comes from the environment: CALLOUT_EVENTS_CREDS in operator
+#  # mode. Writing one here is refused.
+
 log:
   level: info
 
@@ -43,6 +57,7 @@ log:
 #   CALLOUT_APP_ACCOUNT_SK_SEED    signs the User JWT
 #   CALLOUT_AUTH_ACCOUNT_SK_SEED   signs the authorization response
 #   CALLOUT_XKEY_SEED              decrypts callout requests
+#   CALLOUT_EVENTS_CREDS           the event publisher's connection, if events are on
 #
 # Each accepts either the seed itself or a path to a file holding it, so both Kubernetes secret
 # references and Docker secret mounts work unchanged.
