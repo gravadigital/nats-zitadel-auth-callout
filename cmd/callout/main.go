@@ -588,6 +588,10 @@ func buildEventPublisher(
 			log.Info().Str("url", c.ConnectedUrl()).Msg("NATS reconnected (authentication events)")
 		}),
 		asyncErrorHandler(log, "events"),
+		// Without this, a startup failure below closes the connection and the disconnect handler
+		// fires — printing a warning about NATS right after the real error, which sends the
+		// reader looking at connectivity instead of at what actually failed.
+		nats.NoCallbacksAfterClientClose(),
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("connect to NATS for authentication events (CALLOUT_EVENTS_URL=%s — this credential belongs to the account the CONSUMERS live in, not the callout's own AUTH account): %w",

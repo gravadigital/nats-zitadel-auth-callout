@@ -270,6 +270,11 @@ func assertAnaEvent(t *testing.T, event events.Event) {
 	if len(event.Roles) != 1 || event.Roles[0] != "tester" {
 		t.Errorf("roles = %v, want [tester]", event.Roles)
 	}
+	// The template as the RULE declares it, not the resolved path: the event travels off the box,
+	// and an absolute path would publish where this deployment mounts its configuration.
+	if event.Template != "person.yaml" {
+		t.Errorf("template = %q, want the path the rule declares", event.Template)
+	}
 	if event.Instance != "dev" || event.IdentityType != "person" || event.MatchedRole != "tester" {
 		t.Errorf("instance/type/matchedRole = %q/%q/%q, want dev/person/tester",
 			event.Instance, event.IdentityType, event.MatchedRole)

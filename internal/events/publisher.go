@@ -201,6 +201,16 @@ func CheckStream(ctx context.Context, conn *nats.Conn, streamName, subject strin
 			return fmt.Errorf("events: the stream %q does not exist. Create it in the account the events connection lands in, "+
 				"covering %q — the callout deliberately cannot create streams: %w", streamName, subject, err)
 		}
+		// No answer at all is ambiguous, and the two causes look identical from here: JetStream
+		// never replied, or the credential is not allowed to ASK about this stream — a denied
+		// request gets no responder rather than a refusal. Naming both is the difference between
+		// a five-minute fix and an hour of looking at the wrong thing.
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, nats.ErrNoResponders) {
+			return fmt.Errorf("events: JetStream did not answer about the stream %q within %s. "+
+				"Either the stream does not exist, or this credential may not ask about it: it needs pub on "+
+				"$JS.API.STREAM.INFO.%s (a denied request gets no responder, not a refusal): %w",
+				streamName, streamCheckTimeout, streamName, err)
+		}
 		return fmt.Errorf("events: read the stream %q (the events credential needs pub on $JS.API.STREAM.INFO.%s): %w",
 			streamName, streamName, err)
 	}
@@ -358,7 +368,7 @@ func (p *Publisher) publish(item queued) {
 		p.log.Warn().Err(err).
 			Str("sub", item.userID).
 			Int("attempt", attempt).
-			Dur("retryIn", wait).
+			Str("retryIn", wait.String()).
 			Msg("publishing the authentication event failed; retrying")
 
 		select {
@@ -387,7 +397,10 @@ func (p *Publisher) Close(ctx context.Context) error {
 		// Tell the worker to stop waiting between retries, so the drain ends promptly rather
 		// than holding the process open for a JetStream that is not answering.
 		p.stopOnce.Do(func() { close(p.hardStop) })
-		err = fmt.Errorf("events: %d event(s) still queued at shutdown: %w", len(p.queue), ctx.Err())
+		// The count is of the QUEUE, so it can be zero while one event is still in flight —
+		// which is the common case for a shutdown during a retry.
+		err = fmt.Errorf("events: draining did not finish before the deadline (%d queued, plus whatever was in flight): %w",
+			len(p.queue), ctx.Err())
 	}
 
 	if dropped, failed := p.dropped.Load(), p.failed.Load(); dropped > 0 || failed > 0 {

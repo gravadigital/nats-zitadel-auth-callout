@@ -34,8 +34,10 @@ func sampleAuthentication() Authentication {
 			},
 		},
 		Decision: authz.Decision{
-			Rule:          "app-user",
-			Template:      "templates/person.yaml",
+			Rule: "app-user",
+			// The resolved path is what a log carries; the event carries the declared one.
+			Template:      "/etc/auth-callout/templates/person.yaml",
+			TemplateRef:   "templates/person.yaml",
 			IdentityModel: authz.UserTypePerson,
 		},
 		ClientIP:  "10.1.2.3",

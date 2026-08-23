@@ -99,7 +99,10 @@ type Event struct {
 	// for the catch-all. With a token carrying several roles it is the only way to know which
 	// one applied.
 	MatchedRole string `json:"matched_role"`
-	// Template is the permission template that was expanded.
+	// Template is the permission template that was expanded, as the rule declares it
+	// (`templates/person.yaml`). It is deliberately NOT the resolved filesystem path: that would
+	// publish where this deployment happens to mount its configuration, and would read
+	// differently from a container than from a laptop for no gain to any consumer.
 	Template string `json:"template"`
 	// ClientIP is the connecting client's host.
 	ClientIP string `json:"client_ip,omitempty"`
@@ -124,7 +127,7 @@ func newEvent(in Authentication, nameClaim, emailClaim string) Event {
 		Instance:        in.Identity.Instance,
 		IdentityType:    string(in.Decision.IdentityModel),
 		MatchedRole:     in.Decision.Rule,
-		Template:        in.Decision.Template,
+		Template:        in.Decision.TemplateRef,
 		ClientIP:        in.ClientIP,
 		Session:         in.Session,
 	}
