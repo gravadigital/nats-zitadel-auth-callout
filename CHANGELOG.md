@@ -20,12 +20,18 @@ under **Changed** with what a deployment has to do.
   Three properties are worth knowing before turning it on. The publisher uses a **second
   connection, with its own credential**, into the account the consumers live in, because the
   callout's own connection is in the AUTH account whose subjects no application client can see.
-  Delivery is **acked JetStream** and the authentication path never waits for it: events are
-  queued and published from another goroutine, a full queue drops loudly rather than growing
-  memory, and retries carry the connection's nkey as `Nats-Msg-Id` so a lost ack cannot become
-  two events. The **stream is yours to create** — startup and `auth-callout verify` only check
-  that it exists and actually captures the subject, which is the failure nothing reports at
-  runtime.
+  Delivery has **two modes**, and `events.stream` is the choice. With a stream, each event is
+  published to JetStream and acked: a consumer that was down reads what it missed, retries carry
+  the connection's nkey as `Nats-Msg-Id` so a lost ack cannot become two events, and the stream is
+  yours to create — startup and `auth-callout verify` only check that it exists and actually
+  captures the subject, which is the failure nothing reports at runtime. Without a stream, events
+  are ordinary core NATS messages: at most once, to whoever is subscribed at that instant, and the
+  credential needs a single publish permission. Neither is defaulted, and the startup line and
+  `verify` both name the mode in effect.
+
+  In both modes **the authentication path never waits for an event**: they are queued and
+  published from another goroutine, and a full queue drops loudly rather than growing memory
+  inside the service that authenticates the bus.
 
 - **`CALLOUT_IDP_ENRICH`** (`idp.enrich`): how much the verifier asks the provider's userinfo
   endpoint for what the token did not carry — `none`, `username` or `profile`. An access token is

@@ -340,19 +340,30 @@ func TestEventsSettingsWithoutASubjectAreRefused(t *testing.T) {
 	}
 }
 
-func TestEventsRequireAStream(t *testing.T) {
+func TestEventsStreamIsOptionalAndSelectsTheDeliveryMode(t *testing.T) {
+	// No stream is a legitimate configuration, not an omission: the events are then ordinary core
+	// NATS messages. Requiring one would force JetStream on a deployment that only wants to tell
+	// a live consumer that somebody signed in.
 	env := baseEnv()
 	env["CALLOUT_EVENTS_SUBJECT"] = "dev.events.auth"
 	env["CALLOUT_EVENTS_CREDS"] = "/tmp/events.creds"
 
-	_, err := loadWith(t, env)
-	if err == nil {
-		t.Fatal("load succeeded with no events stream, want an error")
+	cfg, err := loadWith(t, env)
+	if err != nil {
+		t.Fatalf("load with no events stream: %v", err)
 	}
-	// The publisher waits for an ack. Without a stream there is nothing to give one, so every
-	// publish would time out.
-	if !strings.Contains(err.Error(), "CALLOUT_EVENTS_STREAM") {
-		t.Errorf("error %q does not name the stream setting", err)
+	if cfg.EventsStream != "" {
+		t.Errorf("EventsStream = %q, want empty", cfg.EventsStream)
+	}
+
+	// And with one, it is carried through untouched.
+	env["CALLOUT_EVENTS_STREAM"] = "AUTH_EVENTS"
+	cfg, err = loadWith(t, env)
+	if err != nil {
+		t.Fatalf("load with an events stream: %v", err)
+	}
+	if cfg.EventsStream != "AUTH_EVENTS" {
+		t.Errorf("EventsStream = %q, want AUTH_EVENTS", cfg.EventsStream)
 	}
 }
 

@@ -51,6 +51,8 @@ permissions:
 # delegated to the callout too and has no token to present. docs/events.md has the whole setup.
 #events:
 #  subject: "{{instance}}.events.auth"
+#  # OPTIONAL: with a stream, delivery is acked and a consumer that was down can catch up;
+#  # without one, events are plain core messages that only a live consumer receives.
 #  stream: AUTH_EVENTS
 #  user: callout-events
 #  # Its password comes from the environment (CALLOUT_EVENTS_PASSWORD); a file that sets one is

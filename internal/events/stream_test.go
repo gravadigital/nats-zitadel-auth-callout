@@ -289,3 +289,89 @@ func containsAll(text string, fragments ...string) bool {
 	}
 	return true
 }
+
+// --- core delivery -------------------------------------------------------------------------
+
+func TestCorePublisherNeedsNoStream(t *testing.T) {
+	url := startJetStreamServer(t)
+	// No stream is created. In core mode nothing about JetStream is touched, so this also proves
+	// startup does not quietly depend on it.
+	subscriber := connect(t, url)
+	received := make(chan []byte, 1)
+	sub, err := subscriber.Subscribe("prod.events.auth", func(msg *nats.Msg) {
+		received <- msg.Data
+	})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer sub.Unsubscribe() //nolint:errcheck // test cleanup
+	if err := subscriber.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	p := newCoreTestPublisher(t, url, "{{instance}}.events.auth")
+	if p.Confirmed() {
+		t.Error("Confirmed() is true with no stream configured")
+	}
+	p.Authenticated(sampleAuthentication())
+	drain(t, p)
+
+	select {
+	case data := <-received:
+		var event Event
+		if err := json.Unmarshal(data, &event); err != nil {
+			t.Fatalf("decode the event: %v", err)
+		}
+		if event.ID != "281234567890123456" || event.Email != "ana@example.com" {
+			t.Errorf("id/email = %q/%q, want the authenticated identity's", event.ID, event.Email)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no event arrived on the subject")
+	}
+}
+
+func TestCorePublisherDoesNotCheckAnyStream(t *testing.T) {
+	url := startJetStreamServer(t)
+	// A stream exists whose filter does NOT cover the subject. With a stream configured this is a
+	// startup error; without one there is nothing to check and nothing to fail on.
+	createStream(t, connect(t, url), "something.else.>")
+
+	p := newCoreTestPublisher(t, url, "{{instance}}.events.auth")
+	if p.Confirmed() {
+		t.Error("Confirmed() is true with no stream configured")
+	}
+}
+
+func TestCorePublisherLosesEventsWithNoSubscriber(t *testing.T) {
+	url := startJetStreamServer(t)
+
+	// The honest half of core delivery, pinned so nobody has to rediscover it: with nobody
+	// subscribed the event is gone, and the publisher reports success because the server accepted
+	// the message. This is the whole difference from the acked mode.
+	p := newCoreTestPublisher(t, url, "{{instance}}.events.auth")
+	p.Authenticated(sampleAuthentication())
+	drain(t, p)
+
+	if failed := p.failed.Load(); failed != 0 {
+		t.Errorf("failed = %d, want 0: a core publish with no listener is not an error", failed)
+	}
+}
+
+// newCoreTestPublisher builds a publisher with no stream: core delivery.
+func newCoreTestPublisher(t *testing.T, url, subject string) *Publisher {
+	t.Helper()
+
+	nc := connect(t, url)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	p, err := New(ctx, Config{
+		Conn:    nc,
+		Subject: subject,
+		Probe:   probe("prod"),
+	})
+	if err != nil {
+		t.Fatalf("build the core publisher: %v", err)
+	}
+	return p
+}

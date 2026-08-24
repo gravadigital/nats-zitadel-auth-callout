@@ -122,7 +122,8 @@ type FileEvents struct {
 	// Subject is the subject pattern events are published to. Empty (or absent) means the
 	// publisher is off.
 	Subject string `yaml:"subject"`
-	// Stream is the JetStream stream that has to capture Subject.
+	// Stream is the JetStream stream that has to capture Subject. Optional: with it, delivery is
+	// acked and replayable; without it, events are plain core NATS messages.
 	Stream string `yaml:"stream"`
 	// URL is the NATS URL for the events connection. Defaults to server.url.
 	URL string `yaml:"url"`

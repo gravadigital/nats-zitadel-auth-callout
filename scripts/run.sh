@@ -43,17 +43,20 @@ export CALLOUT_NATS_URL="${CALLOUT_NATS_URL:-nats://127.0.0.1:4322}"
 # the same division of labour a real deployment has.
 if [[ -n "${CALLOUT_EVENTS_SUBJECT:-}" ]]; then
   export CALLOUT_EVENTS_CREDS="$NATS_DIR/out/callout-events.creds"
-  export CALLOUT_EVENTS_STREAM="${CALLOUT_EVENTS_STREAM:-AUTH_EVENTS}"
+  # NOT defaulted: an empty stream means core delivery, which is a legitimate choice rather than
+  # an omission. nats/.env decides.
 
   [[ -f "$CALLOUT_EVENTS_CREDS" ]] || {
     echo "ERROR: $CALLOUT_EVENTS_CREDS is missing. Regenerate the identity: rm -rf nats/out && make bootstrap" >&2
     exit 1
   }
-  command -v nats >/dev/null 2>&1 || {
-    echo "ERROR: the authentication events need the nats CLI to create their stream." >&2
-    echo "       Install it (go install github.com/nats-io/natscli/nats@latest) or unset CALLOUT_EVENTS_SUBJECT in nats/.env." >&2
+  # The CLI is only needed to create the stream, so core delivery needs nothing installed.
+  if [[ -n "${CALLOUT_EVENTS_STREAM:-}" ]] && ! command -v nats >/dev/null 2>&1; then
+    echo "ERROR: creating the events stream needs the nats CLI." >&2
+    echo "       Install it (go install github.com/nats-io/natscli/nats@latest), or unset" >&2
+    echo "       CALLOUT_EVENTS_STREAM in nats/.env for unconfirmed core delivery." >&2
     exit 1
-  }
+  fi
 
   # The stream's subject. {{instance}} is expanded here the same way the service expands it, so
   # the .env can hold the same pattern the documentation shows.
@@ -85,7 +88,9 @@ for _ in $(seq 1 50); do
   sleep 0.2
 done
 
-if [[ -n "${CALLOUT_EVENTS_SUBJECT:-}" ]]; then
+if [[ -n "${CALLOUT_EVENTS_SUBJECT:-}" && -z "${CALLOUT_EVENTS_STREAM:-}" ]]; then
+  echo "==> Authentication events: $EVENTS_SUBJECT, core delivery (no stream, nothing stored)"
+elif [[ -n "${CALLOUT_EVENTS_SUBJECT:-}" ]]; then
   echo "==> Authentication events: stream $CALLOUT_EVENTS_STREAM over $EVENTS_SUBJECT"
   NATS_ADMIN=(nats --server "$CALLOUT_NATS_URL" --creds "$NATS_DIR/out/app-admin.creds")
   if "${NATS_ADMIN[@]}" stream info "$CALLOUT_EVENTS_STREAM" >/dev/null 2>&1; then

@@ -24,7 +24,7 @@ permissions:
   inbox_mode: hashed
 events:                             # optional; the subject is what turns it on
   subject: "{{instance}}.events.auth"
-  stream: AUTH_EVENTS
+  stream: AUTH_EVENTS               # omit for unconfirmed core delivery
 log:
   level: info
 ```
@@ -141,7 +141,7 @@ else without it is a startup error rather than a silent no-op.
 | File key | Variable | Notes |
 |---|---|---|
 | `events.subject` | `CALLOUT_EVENTS_SUBJECT` | the subject pattern. **Unset = the publisher is off** |
-| `events.stream` | `CALLOUT_EVENTS_STREAM` | required when on: the stream that must capture the subject |
+| `events.stream` | `CALLOUT_EVENTS_STREAM` | **optional**, and it picks the delivery mode: set = acked JetStream, unset = plain core messages |
 | `events.url` | `CALLOUT_EVENTS_URL` | defaults to `server.url` — usually the same server, a different account |
 | `events.user` | `CALLOUT_EVENTS_USER` | the publisher's user name |
 | — | `CALLOUT_EVENTS_PASSWORD` | **secret** |
@@ -149,6 +149,11 @@ else without it is a startup error rather than a silent no-op.
 | — | `CALLOUT_EVENTS_NKEY_SEED` | **secret** |
 | `events.name_claim` | `CALLOUT_EVENTS_NAME_CLAIM` | claim path for the name. Default `name` |
 | `events.email_claim` | `CALLOUT_EVENTS_EMAIL_CLAIM` | claim path for the email. Default `email` |
+
+`events.stream` is where the one real decision lives. With a stream the event is acked and a
+consumer that was down can read what it missed; without one it is an ordinary NATS message that
+only a consumer subscribed at that instant receives. Neither is defaulted, and the startup line
+reports which one is running.
 
 Exactly one credential form, as for the handler. It is a **separate credential**, in the account
 the event consumers live in: the callout's own connection is in the AUTH account, whose subject

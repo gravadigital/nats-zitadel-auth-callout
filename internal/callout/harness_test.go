@@ -70,6 +70,10 @@ type configFixture struct {
 	// carrying the MINIMAL permissions the documentation claims are enough. If that claim is
 	// wrong, the event tests fail rather than the documentation being quietly optimistic.
 	eventsUser, eventsPass string
+	// coreEventsUser/coreEventsPass are the same thing for CORE delivery, where the documented
+	// permission set is a single publish and nothing else — no JetStream API and no inbox,
+	// because there is no ack to receive.
+	coreEventsUser, coreEventsPass string
 }
 
 // startConfigServer brings up a config-mode server with auth callout configured.
@@ -111,6 +115,9 @@ func startConfigServer(t *testing.T) *configFixture {
 		appAdminPass: "app-admin-pass",
 		eventsUser:   "callout-events",
 		eventsPass:   "events-pass",
+
+		coreEventsUser: "callout-events-core",
+		coreEventsPass: "events-core-pass",
 	}
 
 	// JetStream is opt-in per account once an accounts{} block exists: an account without the
@@ -150,6 +157,16 @@ accounts {
           subscribe: { allow: [ "_INBOX.>" ] }
         }
       }
+
+      # The same publisher for CORE delivery: ONE publish permission and no subscribe at all.
+      # There is no ack to receive, so no inbox to grant and no JetStream API to reach.
+      {
+        user: %q, password: %q
+        permissions: {
+          publish: { allow: [ %q ] }
+          subscribe: { deny: ">" }
+        }
+      }
     ]
   }
 }
@@ -178,6 +195,8 @@ authorization {
 		fx.appAdminUser, fx.appAdminPass,
 		fx.eventsUser, fx.eventsPass,
 		testEventsSubject, "$JS.API.STREAM.INFO."+testEventsStream,
+		fx.coreEventsUser, fx.coreEventsPass,
+		testEventsSubject,
 		issuerPub,
 		fx.handlerUser,
 		xkeyPub,

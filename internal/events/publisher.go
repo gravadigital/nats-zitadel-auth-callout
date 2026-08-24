@@ -58,9 +58,16 @@ type Config struct {
 	// Subject is the subject pattern, with {{placeholder}} references expanded per event
 	// exactly as a permission template's subjects are.
 	Subject string
-	// Stream is the name of the JetStream stream that must capture Subject. It is required:
-	// waiting for an ack is only meaningful if something is there to ack, and naming the stream
-	// is what lets startup verify the subject is actually covered by it.
+	// Stream is the name of the JetStream stream that must capture Subject.
+	//
+	// It also SELECTS THE DELIVERY MODE, because the two are the same question. With a stream,
+	// each event is published to JetStream and the publisher waits for the ack: confirmed, and
+	// readable later by a consumer that was down. Empty, the event is an ordinary core NATS
+	// message — whoever is subscribed at that instant receives it, and there is nothing to read
+	// afterwards, nothing to ack and nothing to retry.
+	//
+	// Neither is the safe default, so there is none: a deployment that believes it is auditing
+	// logins while publishing into the void is worse off than one that had to choose.
 	Stream string
 	// NameClaim and EmailClaim are the claim paths the name and email are read from.
 	NameClaim  string
@@ -79,6 +86,8 @@ type Config struct {
 // keeps the feature opt-in without a flag at the call site — with no subject configured the
 // service holds nil and the callout path is unchanged.
 type Publisher struct {
+	// nc publishes in core mode. js is nil unless a stream was configured.
+	nc      *nats.Conn
 	js      jetstream.JetStream
 	subject string
 	stream  string
@@ -132,18 +141,11 @@ func New(ctx context.Context, cfg Config) (*Publisher, error) {
 		return nil, errors.New("events: missing the NATS connection")
 	case cfg.Subject == "":
 		return nil, errors.New("events: missing the subject")
-	case cfg.Stream == "":
-		return nil, errors.New("events: missing the stream name")
 	}
 
 	probeSubject, err := ProbeSubject(cfg.Subject, cfg.Probe)
 	if err != nil {
 		return nil, err
-	}
-
-	js, err := jetstream.New(cfg.Conn)
-	if err != nil {
-		return nil, fmt.Errorf("events: JetStream context: %w", err)
 	}
 
 	log := cfg.Logger
@@ -158,7 +160,7 @@ func New(ctx context.Context, cfg Config) (*Publisher, error) {
 	}
 
 	p := &Publisher{
-		js:         js,
+		nc:         cfg.Conn,
 		subject:    cfg.Subject,
 		stream:     cfg.Stream,
 		nameClaim:  orDefault(cfg.NameClaim, DefaultNameClaim),
@@ -169,12 +171,30 @@ func New(ctx context.Context, cfg Config) (*Publisher, error) {
 		hardStop:   make(chan struct{}),
 	}
 
-	if err := CheckStream(ctx, cfg.Conn, cfg.Stream, probeSubject); err != nil {
-		return nil, err
+	// With no stream there is nothing to ack and nothing to check: from here on the events are
+	// ordinary core NATS messages.
+	if cfg.Stream != "" {
+		js, err := jetstream.New(cfg.Conn)
+		if err != nil {
+			return nil, fmt.Errorf("events: JetStream context: %w", err)
+		}
+		p.js = js
+		if err := CheckStream(ctx, cfg.Conn, cfg.Stream, probeSubject); err != nil {
+			return nil, err
+		}
 	}
 
 	go p.run()
 	return p, nil
+}
+
+// Confirmed reports whether delivery is acked — that is, whether a stream was configured.
+//
+// The caller uses it to say so out loud, at startup and in `auth-callout verify`. An unconfirmed
+// publisher is a legitimate choice; a silent one is not, because nothing else about a running
+// service distinguishes "nobody was listening" from "the events never went anywhere".
+func (p *Publisher) Confirmed() bool {
+	return p != nil && p.js != nil
 }
 
 // CheckStream confirms that streamName exists on conn's account and that it captures subject.
@@ -323,8 +343,42 @@ func (p *Publisher) run() {
 	}
 }
 
-// publish sends one event and waits for the ack, retrying an inconclusive attempt.
+// publish sends one event: to JetStream and waiting for the ack when a stream is configured, as
+// a plain core message when one is not.
 func (p *Publisher) publish(item queued) {
+	if p.js == nil {
+		p.publishCore(item)
+		return
+	}
+	p.publishToStream(item)
+}
+
+// publishCore sends the event as an ordinary NATS message.
+//
+// There is no ack, so there is nothing to wait for and nothing to retry: the message either
+// enters the connection's buffer or the connection is gone, and unlike a missing ack that
+// outcome is not ambiguous. Whoever is subscribed at this instant receives it; nobody else ever
+// will.
+func (p *Publisher) publishCore(item queued) {
+	if err := p.nc.Publish(item.subject, item.data); err != nil {
+		count := p.failed.Add(1)
+		p.log.Error().Err(err).
+			Str("sub", item.userID).
+			Str("subject", item.subject).
+			Uint64("failedTotal", count).
+			Msg("publishing the authentication event failed: the event is lost")
+		return
+	}
+	// A DENIED publish does not surface here: the server drops the message and reports it out of
+	// band, which is why the service installs an asynchronous error handler on this connection.
+	p.log.Debug().
+		Str("sub", item.userID).
+		Str("subject", item.subject).
+		Msg("authentication event published (core, unconfirmed)")
+}
+
+// publishToStream sends the event and waits for the ack, retrying an inconclusive attempt.
+func (p *Publisher) publishToStream(item queued) {
 	for attempt := 1; ; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
 		ack, err := p.js.Publish(ctx, item.subject, item.data,

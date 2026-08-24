@@ -176,9 +176,12 @@ type Config struct {
 	// name and email in the payload — to a subject nobody chose, and a default subject is
 	// exactly how that would happen.
 	EventsSubject string
-	// EventsStream is the JetStream stream that must capture EventsSubject. Required when
-	// events are on: the publisher waits for an ack, which is only meaningful if a stream is
-	// there to give one, and naming it is what lets startup check the subject is really covered.
+	// EventsStream is the JetStream stream that must capture EventsSubject.
+	//
+	// It is OPTIONAL, and it selects how events are delivered. Set, the publisher publishes to
+	// JetStream and waits for the ack: confirmed delivery, and a consumer that was down can read
+	// what it missed. Empty, events are ordinary core NATS messages: at most once, to whoever is
+	// subscribed at that instant, with nothing to read afterwards.
 	EventsStream string
 	// EventsNATSURL is the URL the events connection uses. It defaults to NATSURL: the usual
 	// case is the same server, a different account.
@@ -449,10 +452,11 @@ func (c *Config) validate() error {
 		offender(setting("CALLOUT_EVENTS_NAME_CLAIM", "events.name_claim"), c.EventsNameClaim)
 		offender(setting("CALLOUT_EVENTS_EMAIL_CLAIM", "events.email_claim"), c.EventsEmailClaim)
 	} else {
-		// The stream is required, not optional: the publisher waits for an ack. Without a stream
-		// there is nothing to ack, every publish would time out, and the deployment would have
-		// asked for confirmed delivery and got a log full of failures.
-		require(setting("CALLOUT_EVENTS_STREAM", "events.stream"), c.EventsStream)
+		// The stream is deliberately NOT required. It selects the delivery mode: with one, each
+		// event is acked by JetStream and readable later; without one, the event is an ordinary
+		// core NATS message that only whoever is subscribed at that instant receives. Both are
+		// legitimate, so neither is imposed — and the service says which one it is running on its
+		// startup line, because that difference is invisible from the outside.
 
 		// The events connection is a SECOND connection, in the account where the consumers are.
 		// Its credential is separate from the handler's on purpose: the handler's account cannot

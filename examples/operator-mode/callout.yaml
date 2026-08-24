@@ -42,6 +42,8 @@ permissions:
 # docs/events.md for the stream to create and the three permissions to grant.
 #events:
 #  subject: "{{instance}}.events.auth"
+#  # OPTIONAL: with a stream, delivery is acked and a consumer that was down can catch up;
+#  # without one, events are plain core messages that only a live consumer receives.
 #  stream: AUTH_EVENTS
 #  # Its credential is a secret and comes from the environment: CALLOUT_EVENTS_CREDS in operator
 #  # mode. Writing one here is refused.

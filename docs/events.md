@@ -74,23 +74,57 @@ namespaces, so an event published there would be visible to nobody. The publishe
 a **second connection, with its own credential, into the account the consumers live in** — the
 same account clients land in.
 
-That credential needs to publish one subject and nothing else:
+What that credential needs depends on the delivery mode below, and in neither case is it much:
 
-| | subject | why |
+| | subject | acked | core |
+|---|---|:---:|:---:|
+| pub | the events subject | ✓ | ✓ |
+| pub | `$JS.API.STREAM.INFO.<stream>` | ✓ | — |
+| sub | its own inbox (`_INBOX.>`) | ✓ | — |
+
+Core delivery needs **one publish permission and nothing else**: there is no ack, so there is no
+inbox to receive it on and no JetStream API to reach. Both sets are exactly what the test suite
+grants — no more — so if either list were wrong the tests would fail rather than the
+documentation being quietly optimistic.
+
+Neither can create streams, and that is deliberate: creating streams is far more authority than
+publishing an event needs.
+
+## Choosing how it is delivered
+
+`events.stream` is optional, and setting it is the choice:
+
+| | **acked** (a stream) | **core** (no stream) |
 |---|---|---|
-| pub | the events subject | publish the event |
-| pub | `$JS.API.STREAM.INFO.<stream>` | the startup check below |
-| sub | its own inbox (`_INBOX.>`) | receive the JetStream ack |
+| A consumer subscribed right then | receives it | receives it |
+| A consumer that was down | reads it later | **the event never existed** |
+| History, reprocessing | yes | no |
+| The callout knows it arrived | yes, it waits for the ack | no |
+| A lost ack | retried, deduplicated by `Nats-Msg-Id` | not applicable |
+| Credential | three permissions | one |
+| To operate | a stream, with retention | nothing |
 
-Those three are exactly what the test suite grants, so if this list were wrong the tests would
-fail. It cannot create streams, and that is deliberate: creating streams is far more authority
-than publishing an event needs.
+Two things that trip people up. **A stream does not change how you consume**: a live subscriber
+receives the message either way — the stream stores a copy, it does not intercept. And **there is
+no ack without a stream**, because the ack *is* JetStream.
+
+If disk and retention are the objection rather than the guarantee, a memory stream with a short
+age is the middle ground: confirmed delivery plus an hour of history, no disk.
+
+```sh
+nats stream add AUTH_EVENTS --subjects 'prod.events.auth'   --storage memory --retention limits --discard old --max-age 1h --dupe-window 2m
+```
+
+Whichever you pick, the service **says which one on its startup line** (`delivery=…`) and
+`auth-callout verify` reports it. That is on purpose: from outside a running service the two are
+indistinguishable until the day somebody looks for an event that was never stored.
 
 ## Setting it up
 
-### 1. The stream
+### 1. The stream — only for acked delivery
 
-You create it; the callout only checks it. Put it in the account the events land in:
+Skip this entirely for core delivery. Otherwise you create it; the callout only checks it. Put it
+in the account the events land in:
 
 ```sh
 nats stream add AUTH_EVENTS \
@@ -113,10 +147,13 @@ connection, and a backend that reconnects does so on every restart.
 ```sh
 nsc add user --account APP --name callout-events \
   --allow-pub 'prod.events.auth' \
-  --allow-pub '$JS.API.STREAM.INFO.AUTH_EVENTS' \
-  --allow-sub '_INBOX.>'
+  --allow-pub '$JS.API.STREAM.INFO.AUTH_EVENTS' \   # acked delivery only
+  --allow-sub '_INBOX.>'                             # acked delivery only
 nsc generate creds --account APP --name callout-events > callout-events.creds
 ```
+
+For core delivery, drop the last two flags and add `--deny-sub '>'`: publishing an event is the
+only thing this credential ever has to do.
 
 **Config mode** — a user in the `accounts {}` block, plus one line that is easy to miss:
 
@@ -152,7 +189,7 @@ authorization {
 ```yaml
 events:
   subject: "{{instance}}.events.auth"
-  stream: AUTH_EVENTS
+  stream: AUTH_EVENTS         # omit for core delivery
   user: callout-events        # config mode; operator mode uses CALLOUT_EVENTS_CREDS
 ```
 
@@ -207,33 +244,41 @@ events:
 
 ## Delivery
 
-The publish is **acked JetStream**, and the authentication path never waits for it.
+**The authentication path never waits for an event**, in either mode.
 
 A NATS subscription hands messages to its handler one at a time, so waiting for an ack inside the
 callout's handler would stall every connection queued behind it. Events go to a bounded in-memory
-queue and a publishing goroutine instead. What follows from that:
+queue and a publishing goroutine instead. What follows from that, whichever mode you run:
 
 - **An event is never allowed to affect a connection.** It is published after the server already
   has its answer. A failure is logged, never propagated.
-- **A full queue drops, loudly.** If JetStream stops acking, the queue fills and further events
-  are dropped with an error naming the running total. The alternative — growing memory inside the
-  service that authenticates your bus — is worse.
-- **Retries are idempotent.** Three attempts with backoff, each carrying the same `Nats-Msg-Id`,
-  so an ack lost on the way back cannot become two events.
+- **A full queue drops, loudly.** If the publisher stops keeping up, the queue fills and further
+  events are dropped with an error naming the running total. The alternative — growing memory
+  inside the service that authenticates your bus — is worse.
 - **Shutdown drains** what is queued, for up to five seconds.
 
-So: acked and retried, and still not a ledger you can prove complete. If you need one, the stream
-is where it lives — and a dropped or failed event is always in the log.
+With a stream, additionally: three attempts with backoff, each carrying the same `Nats-Msg-Id`,
+so an ack lost on the way back cannot become two events. Acked and retried — and still not a
+ledger you can prove complete; the stream is what makes it one, and a dropped or failed event is
+always in the log.
+
+With no stream there is nothing to retry against and nothing to deduplicate: a core publish
+either enters the connection's buffer or the connection is gone, and unlike a missing ack that
+outcome is unambiguous. One attempt, and an error in the log if the connection refused it.
+
+A **denied** publish is not an error the publisher sees, in either mode: the server drops the
+message and reports it out of band. That is why the service installs an asynchronous error
+handler on this connection, and why the log is where you find it.
 
 ## What is checked before it serves
 
 At startup, and again by [`auth-callout verify`](install.md#verifying):
 
 - the subject pattern expands, and is a literal subject;
-- the stream exists;
-- **the stream actually captures that subject.**
+- the events credential connects;
+- with a stream: it exists, and **it actually captures that subject.**
 
-The last one is the check worth having. A stream whose subject filter does not match reports
+That last one is the check worth having. A stream whose subject filter does not match reports
 nothing at runtime: the publish is accepted, no permissions error is raised, and the events
 accumulate nowhere. Both the service and `verify` refuse to proceed.
 
@@ -242,6 +287,16 @@ PASS  events connection
       connected to nats://127.0.0.1:4222 (server "nats-1")
 PASS  events stream
       AUTH_EVENTS captures prod.events.auth
+```
+
+Core delivery has nothing to check, so `verify` states the consequence instead — at WARN, for the
+same reason a missing XKey warns: it is weaker than the alternative and invisible once the service
+is running.
+
+```
+WARN  events delivery
+      no stream: prod.events.auth is published as a plain core message, so only a consumer
+      subscribed at that instant receives it — nothing is stored, acked or retried
 ```
 
 ## When something is wrong
@@ -254,6 +309,8 @@ PASS  events stream
 | Events have empty `name` and `email` | the access token does not carry them. Set `CALLOUT_IDP_ENRICH=profile` |
 | No events, and the log says *permissions violation for publish* | the credential is missing publish on the subject. A denied publish is asynchronous, which is why this is logged rather than returned |
 | No events and nothing in the log | the publisher is off: `events.subject` is unset |
+| Events arrive live but the stream is empty | there is no stream: `events.stream` is unset, so delivery is core. The startup line says `delivery=core` |
+| A consumer that restarts misses logins | same: core delivery keeps no history. Configure a stream |
 | A consumer sees nothing, but the stream fills | the consumer's template does not grant `sub` on the subject |
 
 ## The trade-offs, stated plainly
@@ -262,5 +319,5 @@ PASS  events stream
   callout request is XKey-encrypted; this is an ordinary message). The control is the subject
   permission, and it is granted per role.
 - **It is a second connection and a second credential** to deploy and rotate.
-- **It publishes on every authentication**, including a backend's reconnections. Retention is
-  yours to size.
+- **It publishes on every authentication**, including a backend's reconnections. With a stream,
+  retention is yours to size; without one, there is nothing to size and nothing to look back at.

@@ -360,3 +360,70 @@ func writeAppUserCreds(t *testing.T, fx *operatorFixture, name string, allowPub,
 	}
 	return writeTempFile(t, name+"-*.creds", string(creds))
 }
+
+// TestConfigModeCoreDeliveryReachesALiveConsumer covers the other delivery mode: no stream, no
+// ack, and a credential holding ONE publish permission and nothing else.
+//
+// It is worth its own end-to-end test for the same reason the acked one is: the claim that a
+// single `publish` grant is enough can only be checked against a real server enforcing it. If
+// core delivery needed an inbox — it does not, because there is no reply to receive — this test
+// would fail, and the documentation would be wrong rather than optimistic.
+func TestConfigModeCoreDeliveryReachesALiveConsumer(t *testing.T) {
+	fx := startConfigServer(t)
+
+	// No stream anywhere. Nothing in core delivery touches JetStream.
+	eventsConn := connectUserPass(t, fx.url, fx.coreEventsUser, fx.coreEventsPass)
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+	defer cancel()
+	publisher, err := events.New(ctx, events.Config{
+		Conn:    eventsConn,
+		Subject: testEventsSubjectPattern,
+		Probe:   testRules(t, "dev").ProbeIdentity(),
+	})
+	if err != nil {
+		t.Fatalf("build the core publisher: %v", err)
+	}
+	if publisher.Confirmed() {
+		t.Error("Confirmed() is true with no stream configured")
+	}
+
+	// A live consumer, subscribed before the client authenticates. In core delivery this is the
+	// only kind of consumer there is.
+	consumer := connectUserPass(t, fx.url, fx.appAdminUser, fx.appAdminPass)
+	received := make(chan []byte, 1)
+	sub, err := consumer.Subscribe(testEventsSubject, func(msg *nats.Msg) { received <- msg.Data })
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer sub.Unsubscribe() //nolint:errcheck // test cleanup
+	if err := consumer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	startConfigService(t, fx, func(cfg *Config) { cfg.Events = publisher })
+
+	client, err := nats.Connect(fx.url,
+		nats.UserInfo(fx.clientUser, fx.clientPass),
+		nats.Token(testEventsToken),
+		nats.CustomInboxPrefix("_INBOX."+authz.HashUserID("u-ana")),
+		nats.Timeout(waitFor),
+	)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer client.Close()
+
+	select {
+	case data := <-received:
+		var event events.Event
+		if err := json.Unmarshal(data, &event); err != nil {
+			t.Fatalf("decode the event: %v", err)
+		}
+		assertAnaEvent(t, event)
+	case <-time.After(waitFor):
+		t.Fatal("no authentication event reached the live consumer")
+	}
+
+	drainPublisher(t, publisher)
+}

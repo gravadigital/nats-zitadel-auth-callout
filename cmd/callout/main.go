@@ -171,9 +171,17 @@ func run() error {
 	if cfg.EventsSubject != "" {
 		// It publishes the authenticated identity — name and email included — so which subject
 		// and which stream belongs on the startup log as prominently as the authorization path.
+		// The delivery mode is named on the same line as the subject. From outside a running
+		// service the two modes are indistinguishable until the day somebody looks for an event
+		// that was never persisted.
+		delivery := "jetstream (acked)"
+		if cfg.EventsStream == "" {
+			delivery = "core (at most once, not confirmed)"
+		}
 		log.Info().
 			Str("subject", cfg.EventsSubject).
 			Str("stream", cfg.EventsStream).
+			Str("delivery", delivery).
 			Str("nats", cfg.EventsNATSURL).
 			Str("enrich", cfg.IDPEnrich).
 			Msg("authentication events enabled")
@@ -352,8 +360,12 @@ func runVerify(args []string) error {
 
 	fmt.Printf("Verifying: serverMode=%s idp=%s nats=%s\n", cfg.ServerMode, cfg.IDPMode, cfg.NATSURL)
 	if cfg.EventsSubject != "" {
+		stream := cfg.EventsStream
+		if stream == "" {
+			stream = "(none: core delivery)"
+		}
 		fmt.Printf("Authentication events: subject=%s stream=%s nats=%s\n",
-			cfg.EventsSubject, cfg.EventsStream, cfg.EventsNATSURL)
+			cfg.EventsSubject, stream, cfg.EventsNATSURL)
 	}
 	if configFile != "" {
 		// Which file was read matters here more than anywhere: the whole point of `verify` is to
@@ -477,6 +489,19 @@ func verifyEventPublisher(cfg *config.Config, router *authz.Router, report *call
 		Check:    "events connection",
 		Detail:   fmt.Sprintf("connected to %s (server %q)", nc.ConnectedUrlRedacted(), nc.ConnectedServerName()),
 	})
+
+	// No stream is a deliberate choice — core delivery — and there is nothing to check about it.
+	// It is still reported, at WARN, for the same reason a missing XKey is: it is weaker than the
+	// alternative and invisible once the service is running.
+	if cfg.EventsStream == "" {
+		report.Add(callout.Finding{
+			Severity: callout.SeverityWarn,
+			Check:    "events delivery",
+			Detail:   fmt.Sprintf("no stream: %s is published as a plain core message, so only a consumer subscribed at that instant receives it — nothing is stored, acked or retried", subject),
+			Fix:      "set CALLOUT_EVENTS_STREAM (or events.stream) and create that stream if you need the events to survive a consumer being down",
+		})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), natsConnectTimeout)
 	defer cancel()
