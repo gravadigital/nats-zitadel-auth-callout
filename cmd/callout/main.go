@@ -25,11 +25,17 @@ import (
 	"github.com/gravadigital/nats-zitadel-auth-callout/internal/authz"
 	"github.com/gravadigital/nats-zitadel-auth-callout/internal/callout"
 	"github.com/gravadigital/nats-zitadel-auth-callout/internal/config"
+	"github.com/gravadigital/nats-zitadel-auth-callout/internal/events"
 	"github.com/gravadigital/nats-zitadel-auth-callout/internal/idp"
 )
 
 // natsConnectTimeout bounds startup: with no NATS the service has nothing to do.
 const natsConnectTimeout = 10 * time.Second
+
+// eventsDrainTimeout bounds how long shutdown waits for the queued authentication events to be
+// published. Delivery is acked, so a rolling restart should not silently lose the last few
+// events — but shutting down eventually wins over announcing a login.
+const eventsDrainTimeout = 5 * time.Second
 
 // Build information, set with -ldflags at release time:
 //
@@ -162,6 +168,32 @@ func run() error {
 		Str("nats", cfg.NATSURL).
 		Str("rules", cfg.RulesPath).
 		Msg("starting nats-auth-callout")
+	if cfg.EventsSubject != "" {
+		// It publishes the authenticated identity — name and email included — so which subject
+		// and which stream belongs on the startup log as prominently as the authorization path.
+		// The delivery mode is named on the same line as the subject. From outside a running
+		// service the two modes are indistinguishable until the day somebody looks for an event
+		// that was never persisted.
+		delivery := "jetstream (acked)"
+		if cfg.EventsStream == "" {
+			delivery = "core (at most once, not confirmed)"
+		}
+		log.Info().
+			Str("subject", cfg.EventsSubject).
+			Str("stream", cfg.EventsStream).
+			Str("delivery", delivery).
+			Str("nats", cfg.EventsNATSURL).
+			Str("enrich", cfg.IDPEnrich).
+			Msg("authentication events enabled")
+		if cfg.IDPEnrich != config.IDPEnrichProfile && cfg.IDPMode != config.IDPModeMock {
+			// The single most likely disappointment with this feature: the events arrive, and
+			// every one of them has an empty name and email. An access token is not an ID token,
+			// and Zitadel — among others — keeps both claims out of it.
+			log.Warn().Msg("authentication events will carry a name and email only if the ACCESS TOKEN does: " +
+				"many providers (Zitadel included) keep them out of it. Set CALLOUT_IDP_ENRICH=profile to fill " +
+				"them from userinfo instead (one cached call per user)")
+		}
+	}
 	if cfg.IDPMode == config.IDPModeMock {
 		log.Warn().Msg("IdP in MOCK mode: any well-formed token is accepted. Do not use in production.")
 	}
@@ -238,6 +270,7 @@ func run() error {
 		nats.ReconnectHandler(func(c *nats.Conn) {
 			log.Info().Str("url", c.ConnectedUrl()).Msg("NATS reconnected")
 		}),
+		asyncErrorHandler(&log, "callout"),
 	}
 
 	nc, err := nats.Connect(cfg.NATSURL, opts...)
@@ -250,6 +283,30 @@ func run() error {
 	}
 	defer nc.Drain() //nolint:errcheck // on the way out there is nobody to report to
 
+	// The authentication event publisher, when one is configured. It gets its OWN connection,
+	// into the account where the consumers live: the callout's connection is in the AUTH
+	// account, whose subject namespace no application client can see.
+	//
+	// Order matters below. The connection is registered for draining first and the publisher
+	// second, so that on the way out the deferred calls run in reverse: the queued events are
+	// published, and only then does their connection go away.
+	eventsConn, eventsPub, err := buildEventPublisher(ctx, cfg, router, &log)
+	if err != nil {
+		return err
+	}
+	if eventsConn != nil {
+		defer eventsConn.Drain() //nolint:errcheck // on the way out there is nobody to report to
+	}
+	if eventsPub != nil {
+		defer func() {
+			drainCtx, cancel := context.WithTimeout(context.Background(), eventsDrainTimeout)
+			defer cancel()
+			if err := eventsPub.Close(drainCtx); err != nil {
+				log.Warn().Err(err).Msg("draining the authentication events did not finish")
+			}
+		}()
+	}
+
 	svc, err := callout.New(callout.Config{
 		Conn:           nc,
 		Verifier:       verifier,
@@ -261,6 +318,7 @@ func run() error {
 		TargetAccount:  cfg.TargetAccount,
 		ResponseSigner: responseSigner,
 		XKey:           xkey,
+		Events:         eventsPub,
 	})
 	if err != nil {
 		return err
@@ -301,6 +359,14 @@ func runVerify(args []string) error {
 	}
 
 	fmt.Printf("Verifying: serverMode=%s idp=%s nats=%s\n", cfg.ServerMode, cfg.IDPMode, cfg.NATSURL)
+	if cfg.EventsSubject != "" {
+		stream := cfg.EventsStream
+		if stream == "" {
+			stream = "(none: core delivery)"
+		}
+		fmt.Printf("Authentication events: subject=%s stream=%s nats=%s\n",
+			cfg.EventsSubject, stream, cfg.EventsNATSURL)
+	}
 	if configFile != "" {
 		// Which file was read matters here more than anywhere: the whole point of `verify` is to
 		// confirm the deployment's real configuration, and reading a different file than the
@@ -314,9 +380,10 @@ func runVerify(args []string) error {
 
 	// The rules and templates load exactly as the service would load them, so a broken
 	// configuration is reported here rather than at the next restart.
-	if _, err := authz.NewRouterFromFile(cfg.RulesPath, cfg.Instance,
+	router, err := authz.NewRouterFromFile(cfg.RulesPath, cfg.Instance,
 		authz.WithInboxMode(authz.InboxMode(cfg.InboxMode)),
-	); err != nil {
+	)
+	if err != nil {
 		fmt.Printf("FAIL  permission configuration\n      %v\n", err)
 		fmt.Println("\n0 passed, 0 warning(s), 1 failure(s)\n\nThis deployment is not ready to serve traffic.")
 		return errVerifyFailed
@@ -354,11 +421,105 @@ func runVerify(args []string) error {
 		TargetAccount:  cfg.TargetAccount,
 	})
 
+	// The events wiring is checked from here rather than from inside callout.Verify: it is a
+	// different connection into a different account, and the checks belong with the
+	// configuration that describes it.
+	verifyEventPublisher(cfg, router, report)
+
 	fmt.Print(report.String())
 	if !report.OK() {
 		return errVerifyFailed
 	}
 	return nil
+}
+
+// verifyEventPublisher checks the authentication event wiring: that the credential connects
+// into its account, and that the stream exists and captures the subject the service would
+// publish to.
+//
+// The last one is the check that earns its keep. A stream whose subject filter does not match
+// the configured subject is invisible at runtime — the publish is accepted, no permissions error
+// is raised, and the events accumulate nowhere — so a deployment can believe for months that it
+// is recording every login.
+func verifyEventPublisher(cfg *config.Config, router *authz.Router, report *callout.Report) {
+	if cfg.EventsSubject == "" {
+		return // opt-in, and off: nothing to check
+	}
+
+	subject, err := events.ProbeSubject(cfg.EventsSubject, router.ProbeIdentity())
+	if err != nil {
+		report.Add(callout.Finding{
+			Severity: callout.SeverityFail,
+			Check:    "events subject",
+			Detail:   err.Error(),
+			Fix:      "fix CALLOUT_EVENTS_SUBJECT (or events.subject); it has to expand to one literal subject for every authenticated identity",
+		})
+		return
+	}
+
+	auth, err := eventsAuthOption(cfg)
+	if err != nil {
+		report.Add(callout.Finding{
+			Severity: callout.SeverityFail,
+			Check:    "events credential",
+			Detail:   err.Error(),
+			Fix:      "set exactly one of CALLOUT_EVENTS_CREDS, CALLOUT_EVENTS_USER+CALLOUT_EVENTS_PASSWORD or CALLOUT_EVENTS_NKEY_SEED",
+		})
+		return
+	}
+
+	nc, err := nats.Connect(cfg.EventsNATSURL, auth,
+		nats.Name("nats-auth-callout-verify-events"),
+		nats.Timeout(natsConnectTimeout),
+		nats.MaxReconnects(0),
+	)
+	if err != nil {
+		report.Add(callout.Finding{
+			Severity: callout.SeverityFail,
+			Check:    "events connection",
+			Detail:   fmt.Sprintf("cannot connect with the events credential to %s: %v", cfg.EventsNATSURL, err),
+			Fix:      "this credential belongs to the account the event CONSUMERS live in, not to the callout's AUTH account",
+		})
+		return
+	}
+	defer nc.Close()
+
+	report.Add(callout.Finding{
+		Severity: callout.SeverityPass,
+		Check:    "events connection",
+		Detail:   fmt.Sprintf("connected to %s (server %q)", nc.ConnectedUrlRedacted(), nc.ConnectedServerName()),
+	})
+
+	// No stream is a deliberate choice — core delivery — and there is nothing to check about it.
+	// It is still reported, at WARN, for the same reason a missing XKey is: it is weaker than the
+	// alternative and invisible once the service is running.
+	if cfg.EventsStream == "" {
+		report.Add(callout.Finding{
+			Severity: callout.SeverityWarn,
+			Check:    "events delivery",
+			Detail:   fmt.Sprintf("no stream: %s is published as a plain core message, so only a consumer subscribed at that instant receives it — nothing is stored, acked or retried", subject),
+			Fix:      "set CALLOUT_EVENTS_STREAM (or events.stream) and create that stream if you need the events to survive a consumer being down",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), natsConnectTimeout)
+	defer cancel()
+
+	if err := events.CheckStream(ctx, nc, cfg.EventsStream, subject); err != nil {
+		report.Add(callout.Finding{
+			Severity: callout.SeverityFail,
+			Check:    "events stream",
+			Detail:   err.Error(),
+			Fix:      fmt.Sprintf("create or re-filter the stream so it captures %q, in the account the events credential lands in", subject),
+		})
+		return
+	}
+	report.Add(callout.Finding{
+		Severity: callout.SeverityPass,
+		Check:    "events stream",
+		Detail:   fmt.Sprintf("%s captures %s", cfg.EventsStream, subject),
+	})
 }
 
 // errVerifyFailed makes `verify` exit non-zero without printing a second error line: the report
@@ -371,27 +532,120 @@ var errVerifyFailed = errors.New("verification failed")
 // artifact, whereas a config-mode server authenticates its users with user/password or an
 // nkey. Config validation already ensured exactly one form is set.
 func handlerAuthOption(cfg *config.Config) (nats.Option, error) {
+	return authOption("handler", cfg.HandlerCreds, cfg.HandlerUser, cfg.HandlerPassword, cfg.HandlerNKeySeed)
+}
+
+// eventsAuthOption builds the nats.Option for the events connection.
+//
+// It is a separate credential from the handler's, and deliberately so: it authenticates into a
+// DIFFERENT account (the one the consumers live in) and needs nothing but publish rights on one
+// subject. Reusing the handler's would put the callout's own credential where it does not
+// belong and grant far more than publishing an event requires.
+func eventsAuthOption(cfg *config.Config) (nats.Option, error) {
+	return authOption("events", cfg.EventsCreds, cfg.EventsUser, cfg.EventsPassword, cfg.EventsNKeySeed)
+}
+
+// authOption turns whichever credential form is configured into a nats.Option. Config
+// validation already ensured exactly one of them is set.
+func authOption(what, creds, user, password, nkeySeed string) (nats.Option, error) {
 	switch {
-	case cfg.HandlerCreds != "":
-		return nats.UserCredentials(cfg.HandlerCreds), nil
+	case creds != "":
+		return nats.UserCredentials(creds), nil
 
-	case cfg.HandlerUser != "":
-		return nats.UserInfo(cfg.HandlerUser, cfg.HandlerPassword), nil
+	case user != "":
+		return nats.UserInfo(user, password), nil
 
-	case cfg.HandlerNKeySeed != "":
-		kp, err := callout.LoadKeyPair(cfg.HandlerNKeySeed)
+	case nkeySeed != "":
+		kp, err := callout.LoadKeyPair(nkeySeed)
 		if err != nil {
-			return nil, fmt.Errorf("handler nkey: %w", err)
+			return nil, fmt.Errorf("%s nkey: %w", what, err)
 		}
 		pub, err := kp.PublicKey()
 		if err != nil {
-			return nil, fmt.Errorf("handler nkey pubkey: %w", err)
+			return nil, fmt.Errorf("%s nkey pubkey: %w", what, err)
 		}
 		// The signature callback keeps the seed in memory rather than on the wire.
 		return nats.Nkey(pub, kp.Sign), nil
 	}
 
-	return nil, errors.New("no handler credentials configured")
+	return nil, fmt.Errorf("no %s credentials configured", what)
+}
+
+// asyncErrorHandler logs the errors NATS reports out of band.
+//
+// It matters more here than in an average client. A permissions violation on a PUBLISH is
+// asynchronous: the publish call returns nil, the message is dropped by the server, and the
+// only notice arrives here. Without this handler an events credential that is missing its
+// publish permission looks exactly like a working one that nobody happens to be consuming.
+func asyncErrorHandler(log *zerolog.Logger, connection string) nats.Option {
+	return nats.ErrorHandler(func(_ *nats.Conn, sub *nats.Subscription, err error) {
+		event := log.Error().Err(err).Str("connection", connection)
+		if sub != nil {
+			event = event.Str("subject", sub.Subject)
+		}
+		event.Msg("NATS reported an asynchronous error")
+	})
+}
+
+// buildEventPublisher connects the events connection and builds the publisher.
+//
+// It returns (nil, nil, nil) when the deployment configured no subject: the feature is opt-in,
+// and with it off nothing here runs and nothing about the callout path changes.
+//
+// A failure is fatal to startup, on purpose. Every failure it can report is a wiring mistake —
+// the wrong account, a credential without publish rights, a stream that does not exist or does
+// not capture the subject — and all of them are silent at runtime. A deployment that asked for
+// acked event delivery is better told at deploy time than left believing it is auditing logins.
+func buildEventPublisher(
+	ctx context.Context,
+	cfg *config.Config,
+	router *authz.Router,
+	log *zerolog.Logger,
+) (*nats.Conn, *events.Publisher, error) {
+	if cfg.EventsSubject == "" {
+		return nil, nil, nil
+	}
+
+	auth, err := eventsAuthOption(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	nc, err := nats.Connect(cfg.EventsNATSURL, auth,
+		nats.Name("nats-auth-callout-events"),
+		nats.Timeout(natsConnectTimeout),
+		nats.MaxReconnects(-1),
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			log.Warn().Err(err).Msg("NATS disconnected (authentication events)")
+		}),
+		nats.ReconnectHandler(func(c *nats.Conn) {
+			log.Info().Str("url", c.ConnectedUrl()).Msg("NATS reconnected (authentication events)")
+		}),
+		asyncErrorHandler(log, "events"),
+		// Without this, a startup failure below closes the connection and the disconnect handler
+		// fires — printing a warning about NATS right after the real error, which sends the
+		// reader looking at connectivity instead of at what actually failed.
+		nats.NoCallbacksAfterClientClose(),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("connect to NATS for authentication events (CALLOUT_EVENTS_URL=%s — this credential belongs to the account the CONSUMERS live in, not the callout's own AUTH account): %w",
+			cfg.EventsNATSURL, err)
+	}
+
+	pub, err := events.New(ctx, events.Config{
+		Conn:       nc,
+		Subject:    cfg.EventsSubject,
+		Stream:     cfg.EventsStream,
+		NameClaim:  cfg.EventsNameClaim,
+		EmailClaim: cfg.EventsEmailClaim,
+		Probe:      router.ProbeIdentity(),
+		Logger:     log,
+	})
+	if err != nil {
+		nc.Close()
+		return nil, nil, err
+	}
+	return nc, pub, nil
 }
 
 // authUsersFieldFor names the server-side field the handler has to be listed in, so the
@@ -413,6 +667,7 @@ func buildVerifier(ctx context.Context, cfg *config.Config, log *zerolog.Logger)
 		verifier, err := idp.NewOIDC(ctx, cfg.OIDCIssuerURL, cfg.OIDCRolesClaim,
 			idp.WithOIDCAudience(cfg.OIDCAudience),
 			idp.WithOIDCUsernameClaim(cfg.OIDCUsernameClaim),
+			idp.WithOIDCEnrichment(idp.EnrichMode(cfg.IDPEnrich)),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("initialize OIDC: %w", err)
@@ -433,7 +688,7 @@ func buildVerifier(ctx context.Context, cfg *config.Config, log *zerolog.Logger)
 	default:
 		verifier, err := idp.NewZitadel(ctx, cfg.ZitadelIssuerURL,
 			idp.WithProjectID(cfg.ZitadelProjectID),
-			idp.WithUsernameEnrichment(true),
+			idp.WithEnrichment(idp.EnrichMode(cfg.IDPEnrich)),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("initialize Zitadel: %w", err)

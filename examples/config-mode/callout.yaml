@@ -42,6 +42,22 @@ permissions:
   instance: prod
   inbox_mode: hashed
 
+# --- Authentication events (OPTIONAL) --------------------------------------------------------
+# One event per authenticated connection. Optional, and off unless `subject` is set.
+#
+# The publisher connects SEPARATELY, as a user of the account the consumers live in — the APP
+# account in nats-server.conf, not the AUTH account the callout itself connects to. In config mode
+# that account also needs `allowed_accounts` in the auth_callout block, or this connection is
+# delegated to the callout too and has no token to present. docs/events.md has the whole setup.
+#events:
+#  subject: "{{instance}}.events.auth"
+#  # OPTIONAL: with a stream, delivery is acked and a consumer that was down can catch up;
+#  # without one, events are plain core messages that only a live consumer receives.
+#  stream: AUTH_EVENTS
+#  user: callout-events
+#  # Its password comes from the environment (CALLOUT_EVENTS_PASSWORD); a file that sets one is
+#  # refused, exactly like the handler's.
+
 log:
   level: info
 
@@ -53,3 +69,4 @@ log:
 #   CALLOUT_APP_ACCOUNT_SK_SEED    the auth_callout.issuer key: signs BOTH the User JWT and the
 #                                  response — config mode has one key where operator mode has two
 #   CALLOUT_XKEY_SEED              decrypts callout requests
+#   CALLOUT_EVENTS_PASSWORD        the event publisher's connection, if events are on

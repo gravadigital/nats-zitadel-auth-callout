@@ -492,8 +492,17 @@ func (r *Router) Match(roles []string) (Rule, string, bool) {
 type Decision struct {
 	// Rule is the `match` of the winning rule (the role name, or "*").
 	Rule string
-	// Template is the path of the template that was expanded.
+	// Template is the RESOLVED path of the template that was expanded: absolute, or relative to
+	// the process's working directory. It is what a log line should carry, because it names the
+	// file an operator would open.
 	Template string
+	// TemplateRef is the template as the RULE declares it, relative to rules.yaml's directory.
+	//
+	// It exists because the two audiences want different answers. An operator reading a log
+	// wants the file on disk; anything PUBLISHED off the box wants the path that is stable
+	// across deployments — the absolute one leaks where the configuration happens to be mounted
+	// and changes meaning between a container and a laptop.
+	TemplateRef string
 	// IdentityModel is the rule's `type`: person or service. It is the IDENTITY MODEL that
 	// was applied, not the class of user in Zitadel — a machine user whose role is declared
 	// `type: person` receives a person identity, and that is on purpose.
@@ -581,6 +590,7 @@ func (r *Router) Resolve(roles []string, subject, username string, extra map[str
 	decision := Decision{
 		Rule:          rule.Match,
 		Template:      templatePath,
+		TemplateRef:   rule.Template,
 		IdentityModel: rule.Type,
 	}
 	return id, perms, decision, nil

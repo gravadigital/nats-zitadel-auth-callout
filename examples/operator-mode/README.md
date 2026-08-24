@@ -27,6 +27,7 @@ Two accounts and two users:
 | **AUTH account** | where the callout lives and `$SYS.REQ.USER.AUTH` is served. Needs a signing key |
 | **handler user** (in AUTH) | the callout's own connection. Goes in `--auth-user` |
 | **client user** (in AUTH) | what clients connect with. **Not** in `--auth-user`, denied everything of its own |
+| **events user** (in APP) | OPTIONAL, for [authentication events](../../docs/events.md): the callout's second connection, publishing into the account the consumers live in |
 
 Then the callout is declared on the AUTH account:
 
@@ -38,6 +39,19 @@ nsc edit authcallout --account AUTH \
 ```
 
 The flags take **pubkeys, not names**, and it is `--curve`, not `--xkey`.
+
+If you turn the authentication events on, the publisher's user goes in the **APP** account — not
+AUTH, because that is where the consumers are — with three permissions and no more:
+
+```sh
+nsc add user --account APP --name callout-events \
+  --allow-pub 'prod.events.auth' \
+  --allow-pub '$JS.API.STREAM.INFO.AUTH_EVENTS' \
+  --allow-sub '_INBOX.>'
+```
+
+It deliberately cannot create streams; you create the stream. See
+[events](../../docs/events.md).
 
 ## The two sentinels
 

@@ -22,6 +22,9 @@ permissions:
   rules_path: /etc/auth-callout/rules.yaml
   instance: prod
   inbox_mode: hashed
+events:                             # optional; the subject is what turns it on
+  subject: "{{instance}}.events.auth"
+  stream: AUTH_EVENTS               # omit for unconfirmed core delivery
 log:
   level: info
 ```
@@ -78,6 +81,7 @@ Seeds accept either the seed itself or a path to a file holding it.
 | `idp.roles_claim` | `CALLOUT_OIDC_ROLES_CLAIM` | oidc: **required**, no default |
 | `idp.username_claim` | `CALLOUT_OIDC_USERNAME_CLAIM` | oidc, default `preferred_username` |
 | `idp.audience` | `CALLOUT_OIDC_AUDIENCE` | oidc: worth setting, see below |
+| `idp.enrich` | `CALLOUT_IDP_ENRICH` | `none`, `username` or `profile`. Default: `username` for zitadel, `none` otherwise |
 
 **`mock` accepts any identity a client claims.** It is the development mode, warned about on
 every startup, and never right in production.
@@ -97,6 +101,21 @@ The claim may be an array, a space- or comma-separated string, or an object keye
 **Set `audience` unless you have a reason not to.** Without it, any token the provider issued for
 *any* of its clients verifies here. Startup logs `audienceChecked=false` when it is unset.
 
+**`enrich` decides how much the verifier asks userinfo for** when the token does not carry it. It
+is a setting because it is an HTTP call on the path that authenticates a connection — cached per
+identity, so the cost is one call per user per five minutes rather than one per connection.
+
+```
+none      everything comes from the token
+username  one call for a token with no username, taking only that
+profile   additionally fills the name and the email
+```
+
+The defaults reproduce what the service did before the setting existed, so upgrading changes
+nothing. Reach for `profile` when publishing [authentication events](events.md#name-and-email):
+an access token is not an ID token, and Zitadel — among others — keeps `name` and `email` out of
+it.
+
 ### Permissions
 
 | File key | Variable | Notes |
@@ -112,6 +131,34 @@ one setting.
 `instance` is optional, but the two halves have to agree: a template referencing `{{instance}}`
 with none configured fails at startup, and so does configuring one no template uses. Both would
 otherwise be invisible until a client could not publish.
+
+### Authentication events
+
+Publishing one event per authenticated connection. The whole section is **optional**, and
+`events.subject` is what turns it on: with it unset nothing here is read, and setting anything
+else without it is a startup error rather than a silent no-op.
+
+| File key | Variable | Notes |
+|---|---|---|
+| `events.subject` | `CALLOUT_EVENTS_SUBJECT` | the subject pattern. **Unset = the publisher is off** |
+| `events.stream` | `CALLOUT_EVENTS_STREAM` | **optional**, and it picks the delivery mode: set = acked JetStream, unset = plain core messages |
+| `events.url` | `CALLOUT_EVENTS_URL` | defaults to `server.url` — usually the same server, a different account |
+| `events.user` | `CALLOUT_EVENTS_USER` | the publisher's user name |
+| — | `CALLOUT_EVENTS_PASSWORD` | **secret** |
+| — | `CALLOUT_EVENTS_CREDS` | **secret** — a `.creds` file, the operator-mode form |
+| — | `CALLOUT_EVENTS_NKEY_SEED` | **secret** |
+| `events.name_claim` | `CALLOUT_EVENTS_NAME_CLAIM` | claim path for the name. Default `name` |
+| `events.email_claim` | `CALLOUT_EVENTS_EMAIL_CLAIM` | claim path for the email. Default `email` |
+
+`events.stream` is where the one real decision lives. With a stream the event is acked and a
+consumer that was down can read what it missed; without one it is an ordinary NATS message that
+only a consumer subscribed at that instant receives. Neither is defaulted, and the startup line
+reports which one is running.
+
+Exactly one credential form, as for the handler. It is a **separate credential**, in the account
+the event consumers live in: the callout's own connection is in the AUTH account, whose subject
+namespace no application client can see. [Events](events.md) has the permissions to grant, the
+stream to create and the payload contract.
 
 ### Logging
 

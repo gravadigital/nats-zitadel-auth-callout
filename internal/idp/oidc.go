@@ -31,6 +31,12 @@ type OIDC struct {
 	rolesClaim string
 	// usernameClaim is the claim carrying the human-readable name.
 	usernameClaim string
+	// enrich says how much to ask userinfo for when the token does not carry it. It defaults to
+	// EnrichNone here: a generic provider is not known to withhold anything, so nothing is
+	// requested unless the deployment asks.
+	enrich EnrichMode
+	// userinfo reads the discovered userinfo endpoint, with a per-subject cache.
+	userinfo *userinfoFetcher
 
 	cache      *jwk.Cache
 	jwksURL    string
@@ -62,6 +68,19 @@ func WithOIDCUsernameClaim(claim string) OIDCOption {
 	}
 }
 
+// WithOIDCEnrichment selects how much userinfo is consulted for what the token does not carry.
+//
+// It exists because the problem is not Zitadel-specific: an access token is not an ID token, and
+// plenty of providers keep `name` and `email` out of it. A deployment publishing authentication
+// events turns this on; one that does not, pays nothing.
+func WithOIDCEnrichment(mode EnrichMode) OIDCOption {
+	return func(o *OIDC) {
+		if mode.IsValid() {
+			o.enrich = mode
+		}
+	}
+}
+
 // WithOIDCHTTPClient replaces the HTTP client.
 func WithOIDCHTTPClient(client *http.Client) OIDCOption {
 	return func(o *OIDC) {
@@ -88,27 +107,29 @@ func NewOIDC(ctx context.Context, issuerURL, rolesClaim string, opts ...OIDCOpti
 		rolesClaim:    rolesClaim,
 		usernameClaim: "preferred_username",
 		httpClient:    &http.Client{Timeout: 10 * time.Second},
+		enrich:        EnrichNone,
 		now:           time.Now,
 	}
 	for _, opt := range opts {
 		opt(o)
 	}
 
-	jwksURL, err := discoverJWKSURL(ctx, o.httpClient, o.issuer, &o.issuer)
+	endpoints, err := discoverEndpoints(ctx, o.httpClient, o.issuer, &o.issuer)
 	if err != nil {
 		return nil, err
 	}
-	o.jwksURL = jwksURL
+	o.jwksURL = endpoints.JWKS
+	o.userinfo = newUserinfoFetcher(endpoints.Userinfo, o.httpClient, userinfoTimeout)
 
 	cache := jwk.NewCache(ctx)
-	if err := cache.Register(jwksURL,
+	if err := cache.Register(o.jwksURL,
 		jwk.WithMinRefreshInterval(jwksRefreshInterval),
 		jwk.WithHTTPClient(o.httpClient),
 	); err != nil {
-		return nil, fmt.Errorf("idp: register JWKS %q: %w", jwksURL, err)
+		return nil, fmt.Errorf("idp: register JWKS %q: %w", o.jwksURL, err)
 	}
-	if _, err := cache.Refresh(ctx, jwksURL); err != nil {
-		return nil, fmt.Errorf("idp: read JWKS %q: %w", jwksURL, err)
+	if _, err := cache.Refresh(ctx, o.jwksURL); err != nil {
+		return nil, fmt.Errorf("idp: read JWKS %q: %w", o.jwksURL, err)
 	}
 	o.cache = cache
 
@@ -150,8 +171,41 @@ func (o *OIDC) VerifyToken(ctx context.Context, token string) (*Claims, error) {
 	if username, ok := claims.ClaimString(o.usernameClaim); ok {
 		claims.Username = username
 	}
+	// The OIDC standard names, read from the token when it carries them.
+	if name, ok := claims.ClaimString(claimName); ok {
+		claims.Name = name
+	}
+	if email, ok := claims.ClaimString(claimEmail); ok {
+		claims.Email = email
+	}
+
+	o.enrichClaims(ctx, claims, token)
 
 	return claims, nil
+}
+
+// enrichClaims fills from userinfo what the token did not carry. See Zitadel.enrichClaims: the
+// modes and the best-effort contract are identical, deliberately.
+func (o *OIDC) enrichClaims(ctx context.Context, claims *Claims, token string) {
+	switch o.enrich {
+	case EnrichUsername:
+		if claims.Username != "" {
+			return
+		}
+		if fetched, ok := o.userinfo.fetch(ctx, claims.Subject, token); ok {
+			claims.Username = fetched.PreferredUsername
+			if claims.Username == "" {
+				claims.Username = fetched.Name
+			}
+		}
+	case EnrichProfile:
+		if !needsEnrichment(claims) {
+			return
+		}
+		if fetched, ok := o.userinfo.fetch(ctx, claims.Subject, token); ok {
+			fetched.applyTo(claims)
+		}
+	}
 }
 
 // parse validates the token against a specific JWKS.

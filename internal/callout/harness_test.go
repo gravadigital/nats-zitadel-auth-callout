@@ -62,6 +62,18 @@ type configFixture struct {
 	// clientUser/clientPass are the credentials a client connects with. NOT in auth_users, so
 	// connecting with them triggers the callout.
 	clientUser, clientPass string
+	// appAdminUser/appAdminPass are an unrestricted user of the APP account. It stands in for
+	// the deployment itself: it is what creates the stream the authentication events land in,
+	// because the callout deliberately cannot.
+	appAdminUser, appAdminPass string
+	// eventsUser/eventsPass are the events publisher's credentials, in the APP account and
+	// carrying the MINIMAL permissions the documentation claims are enough. If that claim is
+	// wrong, the event tests fail rather than the documentation being quietly optimistic.
+	eventsUser, eventsPass string
+	// coreEventsUser/coreEventsPass are the same thing for CORE delivery, where the documented
+	// permission set is a single publish and nothing else — no JetStream API and no inbox,
+	// because there is no ack to receive.
+	coreEventsUser, coreEventsPass string
 }
 
 // startConfigServer brings up a config-mode server with auth callout configured.
@@ -98,6 +110,14 @@ func startConfigServer(t *testing.T) *configFixture {
 		handlerPass: "handler-pass",
 		clientUser:  "callout-client",
 		clientPass:  "client-pass",
+
+		appAdminUser: "app-admin",
+		appAdminPass: "app-admin-pass",
+		eventsUser:   "callout-events",
+		eventsPass:   "events-pass",
+
+		coreEventsUser: "callout-events-core",
+		coreEventsPass: "events-core-pass",
 	}
 
 	// JetStream is opt-in per account once an accounts{} block exists: an account without the
@@ -117,8 +137,37 @@ accounts {
       { user: %q, password: %q }
     ]
   }
+  # Two plain users, authenticated by the server itself rather than by the callout. What makes
+  # that work is allowed_accounts below: in config mode every account is delegated to the
+  # callout unless the delegation is scoped, and a delegated infrastructure connection has no
+  # token to present. That is a real deployment requirement, not a test shortcut.
   %s: {
     jetstream: enabled
+    users: [
+      # The deployment's own administrator. It creates the stream; the callout never does.
+      { user: %q, password: %q }
+
+      # The events publisher. These are exactly the permissions docs/events.md asks for, and no
+      # more: publish the event, read the stream's info for the startup check, and receive the
+      # ack on its own inbox.
+      {
+        user: %q, password: %q
+        permissions: {
+          publish: { allow: [ %q, %q ] }
+          subscribe: { allow: [ "_INBOX.>" ] }
+        }
+      }
+
+      # The same publisher for CORE delivery: ONE publish permission and no subscribe at all.
+      # There is no ack to receive, so no inbox to grant and no JetStream API to reach.
+      {
+        user: %q, password: %q
+        permissions: {
+          publish: { allow: [ %q ] }
+          subscribe: { deny: ">" }
+        }
+      }
+    ]
   }
 }
 
@@ -129,6 +178,13 @@ authorization {
     account: AUTH
     auth_users: [ %q ]
     xkey: %q
+
+    # Only the AUTH account's users are delegated to the callout. Without this line EVERY
+    # account is, and the plain users declared in APP below - the deployment's administrator and
+    # the callout's own events publisher - would be sent to the callout too, which has no token
+    # for them. The clients that MUST go through the callout connect as an AUTH user, so
+    # scoping the delegation here changes nothing about them.
+    allowed_accounts: [ AUTH ]
   }
 }
 `,
@@ -136,6 +192,11 @@ authorization {
 		fx.handlerUser, fx.handlerPass,
 		fx.clientUser, fx.clientPass,
 		testAccountName,
+		fx.appAdminUser, fx.appAdminPass,
+		fx.eventsUser, fx.eventsPass,
+		testEventsSubject, "$JS.API.STREAM.INFO."+testEventsStream,
+		fx.coreEventsUser, fx.coreEventsPass,
+		testEventsSubject,
 		issuerPub,
 		fx.handlerUser,
 		xkeyPub,

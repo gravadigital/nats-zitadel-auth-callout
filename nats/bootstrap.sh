@@ -47,6 +47,16 @@ OPERATOR="nats-callout"
 ACCT_APP="APP"
 ACCT_AUTH="AUTH"
 
+# The authentication event publisher's identity is generated here too, so that turning the
+# feature on is one line in .env rather than a detour through nsc. Its grant needs to know the
+# instance and the stream name, which are decisions and therefore live in .env.
+if [[ -f .env ]]; then
+  # shellcheck disable=SC1091
+  set -a; . ./.env; set +a
+fi
+EVENTS_INSTANCE="${CALLOUT_INSTANCE:-dev}"
+EVENTS_STREAM="${CALLOUT_EVENTS_STREAM:-AUTH_EVENTS}"
+
 OUT_DIR="./out"
 NSC_HOME="$OUT_DIR/nsc"
 KEYS_DIR="$NSC_HOME/keys"
@@ -113,6 +123,29 @@ echo "==> Sentinels on $ACCT_AUTH (two: handler + client)"
 "${NSC[@]}" generate creds --account "$ACCT_AUTH" --name sentinel-handler > "$OUT_DIR/sentinel-handler.creds"
 "${NSC[@]}" generate creds --account "$ACCT_AUTH" --name sentinel-client  > "$OUT_DIR/sentinel-client.creds"
 
+echo "==> Events publisher and admin on $ACCT_APP"
+# Two plain users of the APP account, for the OPTIONAL authentication event publisher:
+#
+#   callout-events  the callout's SECOND connection. It publishes one event per authenticated
+#                   connection. It lands in APP rather than AUTH because that is where the
+#                   consumers are: an event published in the callout's own account would be
+#                   visible to nobody.
+#   app-admin       stands in for the deployment itself. It is what creates the stream — the
+#                   callout deliberately cannot, because creating streams is far more authority
+#                   than publishing an event needs. DEV ONLY: it is unrestricted.
+#
+# The grant covers the whole `<instance>.events.>` subtree rather than one subject, so changing
+# the last token of CALLOUT_EVENTS_SUBJECT in .env does not mean regenerating the identity. A
+# real deployment grants the exact subject; see docs/events.md.
+"${NSC[@]}" add user --account "$ACCT_APP" --name callout-events \
+  --allow-pub "${EVENTS_INSTANCE}.events.>" \
+  --allow-pub "\$JS.API.STREAM.INFO.${EVENTS_STREAM}" \
+  --allow-sub "_INBOX.>" >/dev/null
+"${NSC[@]}" add user --account "$ACCT_APP" --name app-admin >/dev/null
+
+"${NSC[@]}" generate creds --account "$ACCT_APP" --name callout-events > "$OUT_DIR/callout-events.creds"
+"${NSC[@]}" generate creds --account "$ACCT_APP" --name app-admin     > "$OUT_DIR/app-admin.creds"
+
 echo "==> The callout's XKey (curve25519)"
 # It encrypts the callout requests end to end: without this, the client's access token travels
 # in the clear over the $SYS.REQ.USER.AUTH subject.
@@ -165,6 +198,13 @@ export CALLOUT_APP_ACCOUNT_SK_SEED="${CALLOUT_NATS_DIR:-.}/out/app-account.sk.se
 export CALLOUT_APP_ACCOUNT_PUB="${CALLOUT_NATS_DIR:-.}/out/app-account.pub"
 export CALLOUT_AUTH_ACCOUNT_SK_SEED="${CALLOUT_NATS_DIR:-.}/out/auth-account.sk.seed"
 export CALLOUT_XKEY_SEED="${CALLOUT_NATS_DIR:-.}/out/callout-xkey.seed"
+
+# The authentication event publisher's credential. It is NOT exported here on purpose: setting
+# it while CALLOUT_EVENTS_SUBJECT is unset is a startup error, because a credential nothing
+# reads is worth reporting rather than ignoring. scripts/run.sh exports it when the .env turns
+# the publisher on.
+#   ${CALLOUT_NATS_DIR:-.}/out/callout-events.creds   the publisher (pub-only, APP account)
+#   ${CALLOUT_NATS_DIR:-.}/out/app-admin.creds        dev-only APP admin; creates the stream
 EOF
 
 cat <<EOF
@@ -176,6 +216,9 @@ cat <<EOF
 
   Clients connect with out/sentinel-client.creds + their Zitadel access token.
   The callout connects with out/sentinel-handler.creds (it bypasses the callout).
+  Authentication events (optional): out/callout-events.creds publishes them, and
+  out/app-admin.creds is the dev credential that creates their stream. Turn them on by
+  uncommenting CALLOUT_EVENTS_SUBJECT in nats/.env.
 
   Next: make run
 EOF

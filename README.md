@@ -18,6 +18,10 @@ It steps in **once, during the handshake**. After that the NATS server enforces 
 on every publish and subscribe — the callout is not in the data path and adds nothing per
 message.
 
+Because it is the only component that knows an authentication happened, it can also **announce
+one**: an optional event per authenticated connection, carrying the identity it just verified.
+Off unless you configure it — see [events](docs/events.md).
+
 ## Why
 
 Without it, NATS permissions live in server configuration or in account JWTs: to change what
@@ -92,6 +96,7 @@ Requires Go 1.26+, `nsc` and `nats-server` on the PATH. The subjects above come 
 **Using it**
 
 - [Connecting a client](docs/client.md) — credentials, token, inbox prefix.
+- [Authentication events](docs/events.md) — telling the bus who signed in, and what that costs.
 - [Zitadel](docs/zitadel.md) — roles, service users, and checking a token.
 - [Troubleshooting](docs/troubleshooting.md) — organised by symptom.
 
@@ -110,9 +115,8 @@ lives in the server, so that is where it is verified.
 What may still change before 1.0 is the shape of configuration. Anything that does will be in
 the [changelog](CHANGELOG.md) with what a deployment has to do about it.
 
-Known gaps: no metrics or health endpoint; `userinfo` enrichment is one uncached HTTP call per
-service-user connection; a revoked token stays valid until it expires, since verification is
-local with no introspection per connection.
+Known gaps: no metrics or health endpoint; a revoked token stays valid until it expires, since
+verification is local with no introspection per connection.
 
 ## Installing
 

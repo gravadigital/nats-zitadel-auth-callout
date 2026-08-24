@@ -36,6 +36,15 @@ type Claims struct {
 	Username string
 	// Roles are the token's project roles, already flattened into a list of names.
 	Roles []string
+	// Name is the human-readable full name (`name`), and Email the email address (`email`).
+	//
+	// Both are OPTIONAL and often empty, and nothing about authorization depends on either:
+	// they exist for the authentication event, which reports WHO connected. An access token is
+	// not an ID token — Zitadel, for one, issues JWT access tokens carrying the username and the
+	// roles but neither of these — so filling them may require the userinfo enrichment (see
+	// EnrichMode). A machine user has no email at all, which is not an error.
+	Name  string
+	Email string
 	// ExpiresAt is the `exp`. It bounds the lifetime of the User JWT the callout mints, so
 	// that the NATS session does not outlive the token that authorized it.
 	ExpiresAt time.Time
@@ -90,6 +99,32 @@ func (c *Claims) ClaimString(path string) (string, bool) {
 		// Objects, arrays and null cannot be subject tokens.
 		return "", false
 	}
+}
+
+// EnrichMode selects how much the verifier asks the identity provider's userinfo endpoint for,
+// when the token itself does not carry it.
+//
+// It is a THREE-state setting rather than a boolean because the two useful levels have very
+// different costs. Filling a missing username fires for the rare token that has none; filling a
+// name and an email fires for every connection whose provider keeps them out of access tokens —
+// which is the common case. Both are cached per subject, and the difference is how often the
+// cache misses.
+type EnrichMode string
+
+const (
+	// EnrichNone never calls userinfo. Everything comes from the token.
+	EnrichNone EnrichMode = "none"
+	// EnrichUsername calls userinfo only when the token carries no username, and takes only
+	// that. It is what makes a machine user readable in `nats server report connections`.
+	EnrichUsername EnrichMode = "username"
+	// EnrichProfile additionally fills the name and the email when the token lacks them. It is
+	// what a deployment turns on to publish authentication events that name a person.
+	EnrichProfile EnrichMode = "profile"
+)
+
+// IsValid reports whether m is a known mode.
+func (m EnrichMode) IsValid() bool {
+	return m == EnrichNone || m == EnrichUsername || m == EnrichProfile
 }
 
 // Verifier verifies an access token. It is an interface so the callout does not depend on

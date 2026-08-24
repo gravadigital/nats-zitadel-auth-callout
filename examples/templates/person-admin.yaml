@@ -5,6 +5,7 @@
 # What differs from `app-user`:
 #   messages  every method of `demo`, `admin_reset` included — not just two
 #   KV        reads the WHOLE bucket; writes only its own keys
+#   events    may watch the authentication events (see docs/events.md)
 #
 # A broad role is NOT a NATS superuser: it stays scoped to its own user id, so it cannot
 # publish while impersonating somebody else, nor read anyone else's inbox.
@@ -16,6 +17,16 @@ pub:
 sub:
   allow:
     - "_INBOX.{{user_id_hash}}.>"
+
+    # The authentication events, if the deployment publishes them. This is the whole story of
+    # who may consume them: they are an ordinary subject, so the answer is an ordinary template
+    # entry, granted per role like everything else.
+    #
+    # It is on the ADMIN template and not on `person.yaml` on purpose. The payload carries the
+    # name and email of everyone who signs in, so a rank-and-file role has no business reading
+    # it. Commented out because the events themselves are opt-in: uncomment it when the
+    # deployment sets CALLOUT_EVENTS_SUBJECT.
+    #- "{{instance}}.events.auth"
 
 kv:
   # Two entries over the SAME bucket with different scopes: full read, scoped write. That is

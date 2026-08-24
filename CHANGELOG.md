@@ -9,7 +9,55 @@ under **Changed** with what a deployment has to do.
 
 ## [Unreleased]
 
+### Added
+
+- **Authentication events.** The callout can publish one message per connection it authenticates,
+  carrying the identity it just verified: the id, name, email, roles, when it happened and when
+  the session expires, plus the audit context it already had (the matched role, the template, the
+  client IP and the connection's nkey). It is **opt-in** — with no `events.subject` configured
+  nothing about the service changes — and documented in [`docs/events.md`](docs/events.md).
+
+  Three properties are worth knowing before turning it on. The publisher uses a **second
+  connection, with its own credential**, into the account the consumers live in, because the
+  callout's own connection is in the AUTH account whose subjects no application client can see.
+  Delivery has **two modes**, and `events.stream` is the choice. With a stream, each event is
+  published to JetStream and acked: a consumer that was down reads what it missed, retries carry
+  the connection's nkey as `Nats-Msg-Id` so a lost ack cannot become two events, and the stream is
+  yours to create — startup and `auth-callout verify` only check that it exists and actually
+  captures the subject, which is the failure nothing reports at runtime. Without a stream, events
+  are ordinary core NATS messages: at most once, to whoever is subscribed at that instant, and the
+  credential needs a single publish permission. Neither is defaulted, and the startup line and
+  `verify` both name the mode in effect.
+
+  In both modes **the authentication path never waits for an event**: they are queued and
+  published from another goroutine, and a full queue drops loudly rather than growing memory
+  inside the service that authenticates the bus.
+
+- **`CALLOUT_IDP_ENRICH`** (`idp.enrich`): how much the verifier asks the provider's userinfo
+  endpoint for what the token did not carry — `none`, `username` or `profile`. An access token is
+  not an ID token, and Zitadel keeps `name` and `email` out of it even with the `profile email`
+  scopes granted, so `profile` is what makes an event name a person. The result is **cached per
+  identity**, so it costs one call per user per five minutes rather than one per connection.
+
+  Defaults reproduce the previous behaviour exactly (`username` for zitadel, `none` otherwise),
+  so no deployment changes by upgrading.
+
 ### Changed
+
+- The userinfo endpoint now comes from the **OIDC discovery document** instead of a hardcoded
+  `/oidc/v1/userinfo`, and its results are cached. A provider behind a path prefix stops being a
+  special case. (#1, #2)
+
+- `examples/config-mode/nats-server.conf` suggested `allowed_accounts: [ APP ]`. **That value
+  creates an authorization bypass** in the topology the example describes: the setting names the
+  account a client CONNECTS AS, and clients connect as a user of the `AUTH` account, so naming
+  `APP` stops delegating them to the callout — every client is then authorized directly with its
+  own permissions and nothing says so. The correct value is `[ AUTH ]`, the comment now explains
+  which account it is about, and a test pins the behaviour in both directions.
+
+  If you copied that line, run `auth-callout verify --client-user … --client-password …`: it
+  connects as a client while the callout is not serving, and a deployment that lets that
+  connection through is bypassing.
 
 - The Docker Hub overview is applied **by hand** rather than from the release workflow. The step
   added in 0.1.1 always fails with 403: Docker Hub refuses to edit a repository description with

@@ -38,6 +38,18 @@ const (
 	ServerModeConfig = "config"
 )
 
+// Userinfo enrichment levels. They mirror idp.EnrichMode; config carries strings so this
+// package keeps depending on nothing.
+const (
+	// IDPEnrichNone never calls userinfo: everything comes from the token.
+	IDPEnrichNone = "none"
+	// IDPEnrichUsername calls it only for a token with no username, and takes only that.
+	IDPEnrichUsername = "username"
+	// IDPEnrichProfile additionally fills the name and the email. It is what an authentication
+	// event needs from a provider that keeps them out of access tokens.
+	IDPEnrichProfile = "profile"
+)
+
 // Inbox derivation modes.
 const (
 	// InboxModeHashed scopes each client to `_INBOX.<hash(user-id)>`. It isolates replies
@@ -140,6 +152,52 @@ type Config struct {
 	// not what a deployment wants.
 	OIDCAudience string
 
+	// IDPEnrich says how much the verifier may ask the provider's userinfo endpoint for, when
+	// the token itself does not carry it: `none`, `username` or `profile`.
+	//
+	// It is a cost, which is why it is a setting: userinfo is an HTTP call on the path that
+	// authenticates a connection. It is cached per subject, so the cost is one call per user per
+	// cache window rather than one per connection.
+	//
+	// The default depends on the IdP mode, to keep every existing deployment behaving exactly as
+	// it did: `username` for zitadel (machine user tokens carry no username, and a readable name
+	// in `nats server report connections` is worth one rare call), `none` for oidc and mock.
+	//
+	// `profile` is what a deployment publishing authentication events sets: an access token is
+	// not an ID token, and Zitadel — among others — keeps `name` and `email` out of it, so
+	// userinfo is the only standards-compliant place to get them.
+	IDPEnrich string
+
+	// EventsSubject is the subject an authentication event is published to. It is a PATTERN,
+	// expanded per event with the same {{placeholders}} permission templates use.
+	//
+	// It has no default, and empty DISABLES the whole feature. Both halves of that are
+	// deliberate: an existing deployment must not start announcing who logs in — with their
+	// name and email in the payload — to a subject nobody chose, and a default subject is
+	// exactly how that would happen.
+	EventsSubject string
+	// EventsStream is the JetStream stream that must capture EventsSubject.
+	//
+	// It is OPTIONAL, and it selects how events are delivered. Set, the publisher publishes to
+	// JetStream and waits for the ack: confirmed delivery, and a consumer that was down can read
+	// what it missed. Empty, events are ordinary core NATS messages: at most once, to whoever is
+	// subscribed at that instant, with nothing to read afterwards.
+	EventsStream string
+	// EventsNATSURL is the URL the events connection uses. It defaults to NATSURL: the usual
+	// case is the same server, a different account.
+	EventsNATSURL string
+	// The events connection's own credentials. It is a SECOND connection, in the account where
+	// the consumers live — the callout's handler connects in the AUTH account, whose subject
+	// namespace application clients cannot see. Exactly one form, like the handler's.
+	EventsCreds    string
+	EventsUser     string
+	EventsPassword string
+	EventsNKeySeed string
+	// EventsNameClaim and EventsEmailClaim are the claim paths the event's name and email are
+	// read from. Empty means the OIDC standard names (`name`, `email`).
+	EventsNameClaim  string
+	EventsEmailClaim string
+
 	// LogLevel is the log level (debug, info, warn, error).
 	LogLevel string
 }
@@ -223,8 +281,36 @@ func load() (*Config, source, error) {
 	envOverride(&cfg.OIDCRolesClaim, "CALLOUT_OIDC_ROLES_CLAIM")
 	envOverride(&cfg.OIDCUsernameClaim, "CALLOUT_OIDC_USERNAME_CLAIM")
 	envOverride(&cfg.OIDCAudience, "CALLOUT_OIDC_AUDIENCE")
+	envOverride(&cfg.IDPEnrich, "CALLOUT_IDP_ENRICH")
 	envOverride(&cfg.InboxMode, "CALLOUT_INBOX_MODE")
+	envOverride(&cfg.EventsSubject, "CALLOUT_EVENTS_SUBJECT")
+	envOverride(&cfg.EventsStream, "CALLOUT_EVENTS_STREAM")
+	envOverride(&cfg.EventsNATSURL, "CALLOUT_EVENTS_URL")
+	envOverride(&cfg.EventsCreds, "CALLOUT_EVENTS_CREDS")
+	envOverride(&cfg.EventsUser, "CALLOUT_EVENTS_USER")
+	envOverride(&cfg.EventsPassword, "CALLOUT_EVENTS_PASSWORD")
+	envOverride(&cfg.EventsNKeySeed, "CALLOUT_EVENTS_NKEY_SEED")
+	envOverride(&cfg.EventsNameClaim, "CALLOUT_EVENTS_NAME_CLAIM")
+	envOverride(&cfg.EventsEmailClaim, "CALLOUT_EVENTS_EMAIL_CLAIM")
 	envOverride(&cfg.LogLevel, "CALLOUT_LOG_LEVEL")
+
+	// The enrichment default depends on the IdP mode, so it can only be decided once every source
+	// has been read. Both values reproduce exactly what the service did before the setting
+	// existed, so no deployment changes behaviour by upgrading.
+	if cfg.IDPEnrich == "" {
+		if cfg.IDPMode == IDPModeZitadel {
+			cfg.IDPEnrich = IDPEnrichUsername
+		} else {
+			cfg.IDPEnrich = IDPEnrichNone
+		}
+	}
+
+	// The events connection almost always goes to the same server as the callout's own, just
+	// into a different account. Defaulting it keeps the common case to one setting, and an
+	// explicit value still wins for the deployment whose accounts live on separate clusters.
+	if cfg.EventsSubject != "" && cfg.EventsNATSURL == "" {
+		cfg.EventsNATSURL = cfg.NATSURL
+	}
 
 	if err := cfg.validate(); err != nil {
 		return nil, src, err
@@ -329,11 +415,77 @@ func (c *Config) validate() error {
 			c.IDPMode, setting("CALLOUT_IDP_MODE", "idp.mode"), IDPModeZitadel, IDPModeOIDC, IDPModeMock)
 	}
 
+	switch c.IDPEnrich {
+	case IDPEnrichNone, IDPEnrichUsername, IDPEnrichProfile:
+	default:
+		return fmt.Errorf("config: invalid userinfo enrichment %q from %s (expected %s, %s or %s)",
+			c.IDPEnrich, setting("CALLOUT_IDP_ENRICH", "idp.enrich"),
+			IDPEnrichNone, IDPEnrichUsername, IDPEnrichProfile)
+	}
+
 	switch c.InboxMode {
 	case InboxModeHashed, InboxModePassthrough:
 	default:
 		return fmt.Errorf("config: invalid inbox mode %q from %s (expected %s or %s)",
 			c.InboxMode, setting("CALLOUT_INBOX_MODE", "permissions.inbox_mode"), InboxModeHashed, InboxModePassthrough)
+	}
+
+	// --- Authentication events -------------------------------------------------------------
+	//
+	// The whole feature hangs off ONE setting, the subject. Everything else here is meaningless
+	// without it, so a value set while the subject is not is REFUSED rather than ignored: a
+	// deployment that configured a stream and a credential and then saw no events would have
+	// nothing to go on.
+	var eventsOff []string
+	offender := func(name, value string) {
+		if value != "" {
+			eventsOff = append(eventsOff, name)
+		}
+	}
+	if c.EventsSubject == "" {
+		offender(setting("CALLOUT_EVENTS_STREAM", "events.stream"), c.EventsStream)
+		offender(setting("CALLOUT_EVENTS_URL", "events.url"), c.EventsNATSURL)
+		offender(setting("CALLOUT_EVENTS_USER", "events.user"), c.EventsUser)
+		offender("CALLOUT_EVENTS_PASSWORD", c.EventsPassword)
+		offender("CALLOUT_EVENTS_CREDS", c.EventsCreds)
+		offender("CALLOUT_EVENTS_NKEY_SEED", c.EventsNKeySeed)
+		offender(setting("CALLOUT_EVENTS_NAME_CLAIM", "events.name_claim"), c.EventsNameClaim)
+		offender(setting("CALLOUT_EVENTS_EMAIL_CLAIM", "events.email_claim"), c.EventsEmailClaim)
+	} else {
+		// The stream is deliberately NOT required. It selects the delivery mode: with one, each
+		// event is acked by JetStream and readable later; without one, the event is an ordinary
+		// core NATS message that only whoever is subscribed at that instant receives. Both are
+		// legitimate, so neither is imposed — and the service says which one it is running on its
+		// startup line, because that difference is invisible from the outside.
+
+		// The events connection is a SECOND connection, in the account where the consumers are.
+		// Its credential is separate from the handler's on purpose: the handler's account cannot
+		// see the application's subject namespace, and this one only ever needs to publish.
+		eventForms := 0
+		if c.EventsCreds != "" {
+			eventForms++
+		}
+		if c.EventsUser != "" || c.EventsPassword != "" {
+			eventForms++
+		}
+		if c.EventsNKeySeed != "" {
+			eventForms++
+		}
+		switch {
+		case eventForms == 0:
+			missing = append(missing, "one of CALLOUT_EVENTS_CREDS, CALLOUT_EVENTS_USER+CALLOUT_EVENTS_PASSWORD or CALLOUT_EVENTS_NKEY_SEED")
+		case eventForms > 1:
+			return errors.New("config: more than one events credential form is set; keep exactly one of CALLOUT_EVENTS_CREDS, CALLOUT_EVENTS_USER+CALLOUT_EVENTS_PASSWORD or CALLOUT_EVENTS_NKEY_SEED")
+		case c.EventsUser != "" && c.EventsPassword == "":
+			missing = append(missing, "CALLOUT_EVENTS_PASSWORD")
+		case c.EventsPassword != "" && c.EventsUser == "":
+			missing = append(missing, "CALLOUT_EVENTS_USER")
+		}
+	}
+
+	if len(eventsOff) > 0 {
+		return fmt.Errorf("config: the authentication event publisher is OFF (%s is not set) but these are configured, so nothing would read them: %s",
+			setting("CALLOUT_EVENTS_SUBJECT", "events.subject"), strings.Join(eventsOff, ", "))
 	}
 
 	if len(unexpected) > 0 {

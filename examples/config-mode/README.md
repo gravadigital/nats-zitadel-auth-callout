@@ -51,16 +51,29 @@ shows up as an authorization failure, not as a startup error**, so change them t
 
 ## Adopting incrementally
 
-`allowed_accounts` restricts which accounts get delegated to the callout. With it absent, every
-account is. Setting it means **accounts left out keep authenticating exactly as they do today**,
-which is what lets you move one account at a time:
+`allowed_accounts` restricts which accounts' users get **delegated** to the callout. With it
+absent, every account is. Setting it means **accounts left out keep authenticating exactly as they
+do today**, which is what lets you move one account at a time:
 
 ```
 auth_callout {
   ...
-  allowed_accounts: [ APP ]
+  allowed_accounts: [ AUTH ]
 }
 ```
+
+**Mind which account that is.** It is the account a client **connects as**, not the one it ends up
+in. Clients here connect as `callout-client`, which lives in `AUTH`, and the User JWT the callout
+mints then places them in `APP`. So `AUTH` is the value for this topology.
+
+Naming `APP` instead is an authorization **bypass**: the `AUTH` users stop being delegated, so
+`callout-client` is authorized directly with its own (deny-all) permissions, the callout never
+fires, and nothing anywhere says so. `auth-callout verify --client-user callout-client
+--client-password ...` catches it — that check exists precisely for this class of failure.
+
+You need this line once the target account has plain users of its own: an
+[authentication event publisher](../../docs/events.md), or any legacy application user. Without
+it their connections are delegated to the callout too, and they have no access token to present.
 
 ## Three things that go wrong
 

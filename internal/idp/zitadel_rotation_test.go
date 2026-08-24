@@ -138,7 +138,7 @@ func TestVerifyTokenRefetchesOnKeyRotation(t *testing.T) {
 	js := newJWKSServer(t, keyOld)
 	ctx := context.Background()
 
-	z, err := NewZitadel(ctx, js.URL, WithUsernameEnrichment(false))
+	z, err := NewZitadel(ctx, js.URL, WithEnrichment(EnrichNone))
 	if err != nil {
 		t.Fatalf("NewZitadel: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestVerifyTokenAcceptsOldKeyAfterRotation(t *testing.T) {
 	js := newJWKSServer(t, keyOld, keyNew)
 	ctx := context.Background()
 
-	z, err := NewZitadel(ctx, js.URL, WithUsernameEnrichment(false))
+	z, err := NewZitadel(ctx, js.URL, WithEnrichment(EnrichNone))
 	if err != nil {
 		t.Fatalf("NewZitadel: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestVerifyTokenRateLimitsRefetch(t *testing.T) {
 	frozen := time.Now()
 	ctx := context.Background()
 	z, err := NewZitadel(ctx, js.URL,
-		WithUsernameEnrichment(false),
+		WithEnrichment(EnrichNone),
 		withClock(func() time.Time { return frozen }),
 	)
 	if err != nil {
@@ -230,7 +230,7 @@ func TestVerifyTokenRefetchesAgainAfterCooldown(t *testing.T) {
 	clock := func() time.Time { return now }
 
 	ctx := context.Background()
-	z, err := NewZitadel(ctx, js.URL, WithUsernameEnrichment(false), withClock(clock))
+	z, err := NewZitadel(ctx, js.URL, WithEnrichment(EnrichNone), withClock(clock))
 	if err != nil {
 		t.Fatalf("NewZitadel: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestVerifyTokenExpiredDoesNotRefetch(t *testing.T) {
 	js := newJWKSServer(t, key)
 	ctx := context.Background()
 
-	z, err := NewZitadel(ctx, js.URL, WithUsernameEnrichment(false))
+	z, err := NewZitadel(ctx, js.URL, WithEnrichment(EnrichNone))
 	if err != nil {
 		t.Fatalf("NewZitadel: %v", err)
 	}
