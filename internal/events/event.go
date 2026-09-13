@@ -29,7 +29,7 @@ const TypeAuthenticated = "authenticated"
 
 // SchemaVersion is the payload's version. It is part of the published contract: a change that
 // would break a consumer parsing the current shape bumps it.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // Authentication is everything the callout knows about a connection it has just authenticated.
 // It is the input to the publisher; the Event is what goes on the wire.
@@ -91,10 +91,6 @@ type Event struct {
 
 	// Instance is the deployment instance the connection landed in.
 	Instance string `json:"instance,omitempty"`
-	// IdentityType is the identity MODEL that was applied — person or service — which is not
-	// the class of user in the identity provider: a machine user matching a `type: person`
-	// rule reports person, and that is correct.
-	IdentityType string `json:"identity_type"`
 	// MatchedRole is the winning rule's `match`: the role that decided the permissions, or "*"
 	// for the catch-all. With a token carrying several roles it is the only way to know which
 	// one applied.
@@ -125,7 +121,6 @@ func newEvent(in Authentication, nameClaim, emailClaim string) Event {
 		AuthenticatedAt: in.At.UTC(),
 		ExpiresAt:       in.ExpiresAt.UTC(),
 		Instance:        in.Identity.Instance,
-		IdentityType:    string(in.Decision.IdentityModel),
 		MatchedRole:     in.Decision.Rule,
 		Template:        in.Decision.TemplateRef,
 		ClientIP:        in.ClientIP,

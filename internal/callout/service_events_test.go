@@ -275,9 +275,9 @@ func assertAnaEvent(t *testing.T, event events.Event) {
 	if event.Template != "person.yaml" {
 		t.Errorf("template = %q, want the path the rule declares", event.Template)
 	}
-	if event.Instance != "dev" || event.IdentityType != "person" || event.MatchedRole != "tester" {
-		t.Errorf("instance/type/matchedRole = %q/%q/%q, want dev/person/tester",
-			event.Instance, event.IdentityType, event.MatchedRole)
+	if event.Instance != "dev" || event.MatchedRole != "tester" {
+		t.Errorf("instance/matchedRole = %q/%q, want dev/tester",
+			event.Instance, event.MatchedRole)
 	}
 	// The session is the connection's user nkey, which the test cannot predict — but it has to
 	// be there and it has to be a user key, because it is also the deduplication id.

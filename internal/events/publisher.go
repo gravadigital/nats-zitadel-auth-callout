@@ -250,19 +250,10 @@ func CheckStream(ctx context.Context, conn *nats.Conn, streamName, subject strin
 // It holds every rule about what an events subject may be, so that the service at startup and
 // `auth-callout verify` before it reach the same verdict on the same configuration:
 //
-//   - it may not use {{service}}, which is empty for people while events are published for
-//     every authenticated connection;
 //   - it has to expand to a valid subject (no unknown placeholder, no empty segment);
 //   - it has to be LITERAL — a message is published to one subject, not to a wildcard;
 //   - it may not live in the server's own `$` namespaces.
 func ProbeSubject(pattern string, probe authz.Identity) (string, error) {
-	for _, name := range authz.SubjectPlaceholders(pattern) {
-		if name == "service" {
-			return "", fmt.Errorf("events: the subject %q uses {{service}}, which is empty for people; "+
-				"the events subject has to expand for every authenticated identity", pattern)
-		}
-	}
-
 	subject, err := authz.ExpandSubject(pattern, probe)
 	if err != nil {
 		return "", fmt.Errorf("events: subject %q: %w", pattern, err)

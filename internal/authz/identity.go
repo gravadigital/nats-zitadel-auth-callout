@@ -6,39 +6,18 @@ import (
 	"strings"
 )
 
-// UserType distinguishes the two classes of identity the callout authenticates. It
-// determines which endpoint a client may serve, not which permissions it receives: that is
-// the template's call.
-//
-// What it does NOT distinguish is the user id: a person and a service are both Zitadel
-// users and both carry `sub`, so both use their `sub` as the user id.
-type UserType string
-
-const (
-	// UserTypePerson is a person: a human Zitadel user signing in through OIDC.
-	UserTypePerson UserType = "person"
-	// UserTypeService is a service user (a Zitadel machine user) standing in for a
-	// backend. Besides the user id it has a service name, declared in the rule, which is
-	// the endpoint it serves.
-	UserTypeService UserType = "service"
-)
-
-// IsValid reports whether t is a known user type.
-func (t UserType) IsValid() bool {
-	return t == UserTypePerson || t == UserTypeService
-}
-
 // Identity is a connection's already-resolved identity: what templates expand against.
 //
-// It is deliberately small. The subject grammar is `<instance>.<user-id>.<svc>.<method>`,
-// so a template only needs to know which instance it is in, who the caller is (user id)
-// and — if it is a service — what it is called, so it can serve its own endpoint.
+// It is deliberately small: a template needs to know which instance it is in and who the
+// caller is, plus whatever the deployment declares from token claims. Everything else about
+// the connection — what it is allowed to serve, and under which subjects — is the template's
+// call, written as literal subjects.
 type Identity struct {
 	// Instance is the deployment instance (dev/stage/prod). It is the first token of every
 	// subject: it isolates deployments that share a single NATS.
 	Instance string
 	// UserID identifies the caller within the instance: it is the token's `sub`, the
-	// Zitadel userId, verbatim. It applies equally to people and to service users, because
+	// Zitadel userId, verbatim. It applies equally to people and to machine users, because
 	// both are Zitadel users.
 	//
 	// It goes into the subject RAW, on purpose: that is what makes a subject readable and
@@ -46,11 +25,6 @@ type Identity struct {
 	// callout) instead of the message body. The trade-off is that the Zitadel userId is
 	// visible in subjects, logs and traces.
 	UserID string
-	// Service is the service name when Type is service; empty for people. It is the
-	// ENDPOINT it serves, not its identity: who it is comes from UserID.
-	Service string
-	// Type is person or service.
-	Type UserType
 	// Username is the human-readable name from the token, if one came through. It goes
 	// into the User JWT's Name field, which is what shows up in
 	// `nats server report connections`.
@@ -60,11 +34,10 @@ type Identity struct {
 	// rules.yaml (`placeholders:`).
 	//
 	// This is what lets the service adopt a subject grammar it did not design. The built-in
-	// placeholders describe THIS project's grammar
-	// (`<instance>.<user-id>.<service>.<method>`); another deployment's may be tenant-first,
-	// region-scoped or something else entirely, and no fixed set of built-ins covers that.
-	// Claims are the only place such a value can come from and still be vouched for by the
-	// IdP.
+	// placeholders only describe the authenticated identity; a deployment's grammar may be
+	// tenant-first, region-scoped or something else entirely, and no fixed set of built-ins
+	// covers that. Claims are the only place such a value can come from and still be vouched
+	// for by the IdP.
 	//
 	// A built-in name cannot be overridden: allowing `user_id` to be redefined from an
 	// arbitrary claim would let a template mint permissions for a different identity than the
@@ -93,7 +66,6 @@ var builtinPlaceholders = map[string]struct{}{
 	"instance":     {},
 	"user_id":      {},
 	"user_id_hash": {},
-	"service":      {},
 }
 
 // IsBuiltinPlaceholder reports whether name is reserved.
@@ -104,16 +76,12 @@ func IsBuiltinPlaceholder(name string) bool {
 
 // placeholders exposes the identity as the map templates consume.
 //
-// `service` is always exposed (empty for people) so that a person template using it by
-// mistake fails startup validation rather than at runtime.
-//
 // `user_id_hash` is exposed pre-computed so a template can write the inbox as
 // `_INBOX.{{user_id_hash}}.>` without knowing how it is derived.
 func (id Identity) placeholders() map[string]string {
 	vars := map[string]string{
 		"instance": id.Instance,
 		"user_id":  id.UserID,
-		"service":  id.Service,
 	}
 	// In passthrough mode there is no per-user inbox, so `user_id_hash` is deliberately NOT
 	// exposed: a template minting `_INBOX.{{user_id_hash}}.>` would grant a permission for an

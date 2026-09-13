@@ -24,7 +24,6 @@ func TestTemplateTypoIsRejected(t *testing.T) {
 version: 1
 rules:
   - match: r
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{
@@ -49,7 +48,6 @@ func TestRulesTypoIsRejected(t *testing.T) {
 version: 1
 rules:
   - match: r
-    type: person
     templates: t.yaml
 `
 	templates := map[string]string{"t.yaml": "pub:\n  allow: [\"a.b\"]\n"}
@@ -72,11 +70,8 @@ placeholders:
   tenant: tenant_id
 rules:
   - match: admin
-    type: person
     template: person.yaml
   - match: svc
-    type: service
-    service: demo
     template: service.yaml
 `
 	templates := map[string]string{
@@ -98,7 +93,7 @@ response:
 `,
 		"service.yaml": `
 sub:
-  allow: ["{{instance}}.*.{{service}}.>"]
+  allow: ["{{instance}}.*.api.>"]
 `,
 	}
 
@@ -116,10 +111,8 @@ func TestDuplicateMatchIsRejected(t *testing.T) {
 version: 1
 rules:
   - match: r
-    type: person
     template: a.yaml
   - match: r
-    type: person
     template: b.yaml
 `
 	templates := map[string]string{
@@ -140,10 +133,8 @@ func TestCatchAllMustBeLast(t *testing.T) {
 version: 1
 rules:
   - match: "*"
-    type: person
     template: a.yaml
   - match: admin
-    type: person
     template: b.yaml
 `
 	templates := map[string]string{
@@ -163,10 +154,8 @@ func TestCatchAllLastIsFine(t *testing.T) {
 version: 1
 rules:
   - match: admin
-    type: person
     template: b.yaml
   - match: "*"
-    type: person
     template: a.yaml
 `
 	templates := map[string]string{
@@ -198,7 +187,6 @@ placeholders:
   tenant: tenant_id
 rules:
   - match: r
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{
@@ -223,10 +211,8 @@ placeholders:
   tenant: tenant_id
 rules:
   - match: a
-    type: person
     template: uses.yaml
   - match: b
-    type: person
     template: plain.yaml
 `
 	templates := map[string]string{
@@ -247,7 +233,6 @@ func TestUnusedInstanceIsRejected(t *testing.T) {
 version: 1
 rules:
   - match: r
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{
@@ -270,7 +255,6 @@ func TestNoInstanceAndNoReferenceIsFine(t *testing.T) {
 version: 1
 rules:
   - match: r
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{
@@ -291,7 +275,6 @@ func TestTemplateGrantingNothingIsRejected(t *testing.T) {
 version: 1
 rules:
   - match: r
-    type: person
     template: t.yaml
 `
 	for name, body := range map[string]string{
@@ -317,7 +300,6 @@ func TestKVOnlyTemplateIsNotEmpty(t *testing.T) {
 version: 1
 rules:
   - match: r
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{
@@ -338,7 +320,6 @@ func TestNoInboxWarns(t *testing.T) {
 version: 1
 rules:
   - match: r
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{
@@ -366,7 +347,6 @@ func TestInboxGrantedDoesNotWarn(t *testing.T) {
 version: 1
 rules:
   - match: r
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{

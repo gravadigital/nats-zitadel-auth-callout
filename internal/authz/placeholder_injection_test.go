@@ -71,7 +71,6 @@ placeholders:
   tenant: tenant_id
 rules:
   - match: user
-    type: person
     template: t.yaml
 `
 
@@ -108,7 +107,6 @@ placeholders:
   tenant: tenant_id
 rules:
   - match: user
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{"t.yaml": "pub:\n  allow: [\"{{tenant}}.x\"]\n"}
@@ -141,7 +139,6 @@ placeholders:
   tenant: tenant_id
 rules:
   - match: user
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{"t.yaml": "pub:\n  allow: [\"{{tenant}}.x\"]\n"}
@@ -168,7 +165,7 @@ rules:
 
 // TestTemplateLiteralWildcardsStillWork is the guard against over-correcting. The fix must
 // constrain claim VALUES only — templates legitimately contain wildcards, and the shipped service
-// template depends on it (`{{instance}}.*.{{service}}.>`).
+// template depends on it (`{{instance}}.*.api.>`).
 func TestTemplateLiteralWildcardsStillWork(t *testing.T) {
 	rules := `
 version: 1
@@ -176,8 +173,6 @@ placeholders:
   tenant: tenant_id
 rules:
   - match: svc
-    type: service
-    service: api
     template: t.yaml
 `
 	templates := map[string]string{
@@ -187,7 +182,7 @@ pub:
   allow: ["{{instance}}.{{tenant}}.>"]
 sub:
   allow:
-    - "{{instance}}.*.{{service}}.>"
+    - "{{instance}}.*.api.>"
     - "{{tenant}}.*.events.>"
 kv:
   - bucket: shared
@@ -225,7 +220,6 @@ placeholders:
   tenant: tenant_id
 rules:
   - match: user
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{
@@ -273,7 +267,6 @@ func TestHostileUserIDRejected(t *testing.T) {
 version: 1
 rules:
   - match: r
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{"t.yaml": "pub:\n  allow: [\"app.{{user_id}}.>\"]\n"}

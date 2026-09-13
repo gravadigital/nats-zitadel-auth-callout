@@ -27,7 +27,7 @@ should start announcing who signs in because it upgraded.
 ```json
 {
   "type": "authenticated",
-  "version": 1,
+  "version": 2,
   "id": "281234567890123456",
   "name": "Ana Pérez",
   "username": "ana@example.com",
@@ -36,7 +36,6 @@ should start announcing who signs in because it upgraded.
   "authenticated_at": "2026-08-23T18:04:11.123Z",
   "expires_at": "2026-08-23T19:04:11Z",
   "instance": "prod",
-  "identity_type": "person",
   "matched_role": "app-user",
   "template": "templates/person.yaml",
   "client_ip": "10.1.2.3",
@@ -55,7 +54,6 @@ should start announcing who signs in because it upgraded.
 | `authenticated_at` | when the callout authenticated the connection, UTC |
 | `expires_at` | when the minted session expires — the same instant the server enforces |
 | `instance` | the deployment instance |
-| `identity_type` | `person` or `service`: the identity MODEL the rule applied, not the class of user in the IdP |
 | `matched_role` | the winning rule's `match`, or `*`. With several roles in a token it is the only way to know which one applied |
 | `template` | the permission template that was expanded, as the rule declares it |
 | `client_ip` | the connecting client's host |
@@ -198,9 +196,8 @@ with the credential's secret half from the environment (`CALLOUT_EVENTS_PASSWORD
 [configuration](configuration.md#authentication-events).
 
 The subject is a **pattern**, expanded with the same placeholders permission templates use, and
-it has to expand to one literal subject: no wildcards, and not `{{service}}`, which is empty for
-people. `{{user_id}}` is allowed and gives consumers per-user filtering — at the price of one
-subject per user in the stream.
+it has to expand to one literal subject: no wildcards. `{{user_id}}` is allowed and gives
+consumers per-user filtering — at the price of one subject per user in the stream.
 
 ### 4. Who may consume it
 

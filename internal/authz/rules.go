@@ -23,16 +23,8 @@ var (
 	// ErrNoRuleMatched is returned when no role in the token matches a rule and there is no
 	// catch-all. It is a deliberate rejection: with no rule there are no permissions to mint.
 	ErrNoRuleMatched = errors.New("authz: no role in the token matches a rule and there is no catch-all")
-	// ErrInvalidUserType flags a rule whose `type` is neither person nor service.
-	ErrInvalidUserType = errors.New("authz: invalid `type` in rule")
 	// ErrEmptyTemplate flags a rule with no template.
 	ErrEmptyTemplate = errors.New("authz: missing `template` in rule")
-	// ErrServiceNameRequired flags a service rule with no service name. The name is the
-	// service's endpoint, so without it the identity cannot be assembled.
-	ErrServiceNameRequired = errors.New("authz: a `type: service` rule needs `service`")
-	// ErrServiceNameOnPerson flags a person rule that declares `service`. It is almost
-	// always a misplaced `type`, so it is rejected instead of ignored.
-	ErrServiceNameOnPerson = errors.New("authz: `service` does not apply to a `type: person` rule")
 	// ErrReservedPlaceholder flags an attempt to redefine a built-in placeholder.
 	ErrReservedPlaceholder = errors.New("authz: reserved placeholder name")
 	// ErrInvalidPlaceholderName flags a declared placeholder whose name a template could never
@@ -78,26 +70,20 @@ const maxPlaceholderValueLen = 128
 // template.go's placeholderRE, so a declared name is always referenceable from a template.
 var placeholderNameRE = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-// Rule is a routing rule: a Zitadel role -> which kind of identity it is and which
-// permission template belongs to it.
+// Rule is a routing rule: a Zitadel role -> the permission template that belongs to it.
 type Rule struct {
 	// Match is the role name exactly as it travels in the token, or "*" for the catch-all.
 	Match string `yaml:"match"`
-	// Type is person or service. It decides how the identity is derived.
-	Type UserType `yaml:"type"`
-	// Service is the service name, required (and only valid) when Type is service. It is
-	// the service's endpoint, the one it serves: `<instance>.*.<service>.>`.
-	Service string `yaml:"service"`
 	// Template is the template path, relative to the directory holding rules.yaml.
 	Template string `yaml:"template"`
 }
 
 // RulesConfig is the content of examples/rules.yaml.
 //
-// Routing depends ONLY on the role: there is no heuristic guessing whether a token belongs
-// to a person or to a service. The rule declares it, and whoever administers Zitadel
-// assigns the role. That makes the question "what permissions does X have?" answerable by
-// reading two files, without running anything.
+// Routing depends ONLY on the role: there is no heuristic inspecting the token to guess what
+// kind of client it is, and no identity model to declare. Whoever administers Zitadel assigns
+// the role, and the rule names the template. That makes the question "what permissions does X
+// have?" answerable by reading two files, without running anything.
 type RulesConfig struct {
 	Version int `yaml:"version"`
 	// Placeholders declares deployment-defined template placeholders and which token claim
@@ -222,17 +208,8 @@ func NewRouter(cfg *RulesConfig, configDir, instance string, opts ...RouterOptio
 	cache := make(map[string]*Template)
 
 	for i, rule := range cfg.Rules {
-		if !rule.Type.IsValid() {
-			return nil, fmt.Errorf("%w: rule %d (match=%q): %q", ErrInvalidUserType, i, rule.Match, rule.Type)
-		}
 		if rule.Template == "" {
 			return nil, fmt.Errorf("%w: rule %d (match=%q)", ErrEmptyTemplate, i, rule.Match)
-		}
-		if rule.Type == UserTypeService && rule.Service == "" {
-			return nil, fmt.Errorf("%w: rule %d (match=%q)", ErrServiceNameRequired, i, rule.Match)
-		}
-		if rule.Type == UserTypePerson && rule.Service != "" {
-			return nil, fmt.Errorf("%w: rule %d (match=%q)", ErrServiceNameOnPerson, i, rule.Match)
 		}
 
 		path := rule.Template
@@ -411,7 +388,7 @@ func NewRouterFromFile(rulesPath, instance string, opts ...RouterOption) (*Route
 //
 // The reason it cannot live in validateSubject (which runs post-expansion) is that by then an
 // injected `*` is indistinguishable from a deliberate one — and templates legitimately use
-// wildcards, e.g. `{{instance}}.*.{{service}}.>` in the shipped service template.
+// wildcards, e.g. `{{instance}}.*.demo.>` in the shipped backend template.
 func validatePlaceholderValue(value string) error {
 	if len(value) > maxPlaceholderValueLen {
 		return fmt.Errorf("longer than %d characters", maxPlaceholderValueLen)
@@ -449,7 +426,6 @@ func (r *Router) probeIdentity() Identity {
 	return Identity{
 		Instance:  r.instance,
 		UserID:    "probe",
-		Service:   "probe",
 		Extra:     extra,
 		InboxMode: r.inboxMode,
 	}
@@ -503,10 +479,6 @@ type Decision struct {
 	// across deployments — the absolute one leaks where the configuration happens to be mounted
 	// and changes meaning between a container and a laptop.
 	TemplateRef string
-	// IdentityModel is the rule's `type`: person or service. It is the IDENTITY MODEL that
-	// was applied, not the class of user in Zitadel — a machine user whose role is declared
-	// `type: person` receives a person identity, and that is on purpose.
-	IdentityModel UserType
 }
 
 // Resolve is the whole path: from the token's roles to the identity and the permissions.
@@ -557,20 +529,16 @@ func (r *Router) Resolve(roles []string, subject, username string, extra map[str
 		}
 	}
 
-	// The user id is the token's `sub`, the same for a person and for a service: both are
-	// Zitadel users. What a service adds is its endpoint NAME, which is a different thing
-	// (several replicas share an endpoint on purpose — that is how NATS balances with queue
-	// groups — but each one connects with the service user's user id).
+	// The user id is the token's `sub`, the same for a person and for a machine user: both are
+	// Zitadel users. A backend that serves an endpoint shared by several replicas writes that
+	// endpoint literally in its template — it is a property of the subject grammar, not of the
+	// identity that authenticated.
 	id := Identity{
 		Instance:  r.instance,
-		Type:      rule.Type,
 		UserID:    subject,
 		Username:  username,
 		Extra:     extra,
 		InboxMode: r.inboxMode,
-	}
-	if rule.Type == UserTypeService {
-		id.Service = rule.Service
 	}
 
 	// The template was looked up by path in the router's cache, so it always exists here.
@@ -588,10 +556,9 @@ func (r *Router) Resolve(roles []string, subject, username string, extra map[str
 	}
 
 	decision := Decision{
-		Rule:          rule.Match,
-		Template:      templatePath,
-		TemplateRef:   rule.Template,
-		IdentityModel: rule.Type,
+		Rule:        rule.Match,
+		Template:    templatePath,
+		TemplateRef: rule.Template,
 	}
 	return id, perms, decision, nil
 }

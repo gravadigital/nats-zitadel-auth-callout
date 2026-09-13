@@ -11,14 +11,14 @@ import (
 
 // personIdentity is a test person identity.
 func personIdentity() Identity {
-	return Identity{Instance: "prod", UserID: "abc123", Type: UserTypePerson}
+	return Identity{Instance: "prod", UserID: "abc123"}
 }
 
 // serviceIdentity is a test service identity. A service user has its own user id (its
 // `sub`) in addition to the endpoint name: they are distinct axes, so here they carry
 // different values on purpose.
 func serviceIdentity() Identity {
-	return Identity{Instance: "prod", UserID: "svc-sub-1", Service: "api", Type: UserTypeService}
+	return Identity{Instance: "prod", UserID: "svc-sub-1"}
 }
 
 func TestExpandPlaceholders(t *testing.T) {
@@ -41,9 +41,11 @@ func TestExpandPlaceholders(t *testing.T) {
 	assertSubjects(t, "sub allow", perms.SubAllow, []string{"_INBOX." + HashUserID("abc123") + ".>"})
 }
 
-func TestExpandServicePlaceholder(t *testing.T) {
+// A backend serves an endpoint written LITERALLY in its template, for any caller's user id.
+// The endpoint is a property of the subject grammar, not of the authenticated identity.
+func TestExpandServedEndpointIsLiteral(t *testing.T) {
 	tmpl := &Template{
-		Sub: SubjectSet{Allow: []string{"{{instance}}.*.{{service}}.>"}},
+		Sub: SubjectSet{Allow: []string{"{{instance}}.*.api.>"}},
 	}
 
 	perms, err := tmpl.Expand(serviceIdentity())
@@ -400,5 +402,5 @@ func assertSubjects(t *testing.T, label string, got, want []string) {
 // probeIdentity is the identity template validation runs against in tests. It mirrors what
 // Router.probeIdentity produces for a deployment declaring no extra placeholders.
 func probeIdentity() Identity {
-	return Identity{Instance: "probe", UserID: "probe", Service: "probe"}
+	return Identity{Instance: "probe", UserID: "probe"}
 }

@@ -37,7 +37,6 @@ placeholders:
   region: metadata.region
 rules:
   - match: app-user
-    type: person
     template: person.yaml
 `
 	templates := map[string]string{
@@ -73,10 +72,10 @@ pub:
 // from an arbitrary claim would let a token choose whose subjects it can reach, defeating the
 // per-user scoping the whole grammar exists to enforce.
 func TestBuiltinPlaceholderCannotBeRedefined(t *testing.T) {
-	for _, name := range []string{"user_id", "user_id_hash", "instance", "service"} {
+	for _, name := range []string{"user_id", "user_id_hash", "instance"} {
 		t.Run(name, func(t *testing.T) {
 			rules := "version: 1\nplaceholders:\n  " + name + ": some_claim\nrules:\n" +
-				"  - match: r\n    type: person\n    template: t.yaml\n"
+				"  - match: r\n    template: t.yaml\n"
 			templates := map[string]string{"t.yaml": "pub:\n  allow:\n    - \"a.b\"\n"}
 
 			_, err := NewRouterFromFile(writeRulesTree(t, rules, templates), "dev")
@@ -85,6 +84,26 @@ func TestBuiltinPlaceholderCannotBeRedefined(t *testing.T) {
 			}
 		})
 	}
+}
+
+// `service` used to be a built-in, sourced from the rule rather than from the identity. Now
+// that it is gone, the name is ordinary: a deployment whose tokens carry a `service` claim may
+// declare it like any other placeholder.
+func TestServiceIsNoLongerReserved(t *testing.T) {
+	rules := "version: 1\nplaceholders:\n  service: service_name\nrules:\n" +
+		"  - match: r\n    template: t.yaml\n"
+	templates := map[string]string{"t.yaml": "pub:\n  allow:\n    - \"{{service}}.b\"\n"}
+
+	router, err := NewRouterFromFile(writeRulesTree(t, rules, templates), "")
+	if err != nil {
+		t.Fatalf("declaring a `service` placeholder must be accepted: %v", err)
+	}
+
+	_, perms, _, err := router.Resolve([]string{"r"}, "sub-1", "", map[string]string{"service": "orders"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	assertSubjects(t, "pub allow", perms.PubAllow, []string{"orders.b"})
 }
 
 // TestUndeclaredPlaceholderFailsAtStartup keeps the existing guarantee intact for the new
@@ -97,7 +116,6 @@ placeholders:
   tenant: tenant_id
 rules:
   - match: r
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{
@@ -118,7 +136,6 @@ func TestInstanceReferencedButNotConfiguredFails(t *testing.T) {
 version: 1
 rules:
   - match: r
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{
@@ -143,7 +160,6 @@ placeholders:
   tenant: tenant_id
 rules:
   - match: r
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{
@@ -176,7 +192,6 @@ placeholders:
   Tenant-ID: tenant_id
 rules:
   - match: r
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{"t.yaml": "pub:\n  allow:\n    - \"a.b\"\n"}
@@ -213,7 +228,6 @@ func TestUserIDHashUnavailableInPassthrough(t *testing.T) {
 version: 1
 rules:
   - match: r
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{
@@ -245,7 +259,6 @@ func TestPassthroughTemplateWithBroadInboxWorks(t *testing.T) {
 version: 1
 rules:
   - match: r
-    type: person
     template: t.yaml
 `
 	templates := map[string]string{

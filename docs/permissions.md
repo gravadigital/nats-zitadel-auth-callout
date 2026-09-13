@@ -17,16 +17,12 @@ version: 1
 
 rules:
   - match: app-admin              # the role name, exactly as it travels in the token
-    type: person
     template: templates/admin.yaml
 
   - match: app-backend
-    type: service
-    service: orders               # the endpoint this identity serves
     template: templates/orders.yaml
 
   - match: "*"                    # optional catch-all, must be last
-    type: person
     template: templates/base.yaml
 ```
 
@@ -37,8 +33,10 @@ Order matters when a token carries several roles: put the most restrictive first
 `match`, or a catch-all that is not last, makes later rules unreachable and **fails at startup**
 rather than silently never firing.
 
-`type` decides how the identity is assembled: `person` uses the token's subject, `service` adds
-the endpoint name from the rule. See [concepts](concepts.md).
+A rule is only these two things: the role to match, and the template to expand. The identity is
+always the token's subject — there is nothing else to declare. An endpoint a backend serves is
+written literally in its template, because it describes the subject grammar rather than the
+identity that authenticated. See [concepts](concepts.md).
 
 ## Templates
 
@@ -78,7 +76,6 @@ misconfigured template.
 |---|---|
 | `{{user_id}}` | the token's `sub`, verbatim |
 | `{{user_id_hash}}` | a stable, subject-safe hash of it |
-| `{{service}}` | the endpoint name, `type: service` rules only |
 | `{{instance}}` | the configured instance, if any |
 
 Names use underscores. A `{{...}}` that does not exist fails at startup, not per connection.

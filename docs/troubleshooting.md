@@ -234,7 +234,6 @@ The callout logs one line per authentication. The fields that answer most questi
 |---|---|
 | `matchedBy` | the winning role. With several roles in a token, everything else is ambiguous without it |
 | `template` | which template was expanded |
-| `identity` | the identity *model* applied (person/service) — not the class of user in the IdP |
 | `inboxHash` | the client's inbox prefix, which cannot be derived by eye from the rest |
 | `pubAllow` / `subAllow` | how many permissions were minted. `0` means something is wrong upstream |
 

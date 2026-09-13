@@ -41,11 +41,12 @@ sub:
     - "_INBOX.{{user_id_hash}}.>"
 `
 
-// minimalServiceTemplate is a valid service template.
+// minimalServiceTemplate is a valid backend template: it serves a literal endpoint, for any
+// caller's user id.
 const minimalServiceTemplate = `
 sub:
   allow:
-    - "{{instance}}.*.{{service}}.>"
+    - "{{instance}}.*.api.>"
 `
 
 func TestMatchIsFirstMatchWins(t *testing.T) {
@@ -55,10 +56,8 @@ func TestMatchIsFirstMatchWins(t *testing.T) {
 version: 1
 rules:
   - match: external-user
-    type: person
     template: templates/external.yaml
   - match: user
-    type: person
     template: templates/user.yaml
 `, map[string]string{
 		"external.yaml": minimalPersonTemplate,
@@ -84,10 +83,8 @@ func TestMatchCatchAll(t *testing.T) {
 version: 1
 rules:
   - match: admin
-    type: person
     template: templates/admin.yaml
   - match: "*"
-    type: person
     template: templates/guest.yaml
 `, map[string]string{
 		"admin.yaml": minimalPersonTemplate,
@@ -116,8 +113,6 @@ func TestResolveWithoutCatchAllRejects(t *testing.T) {
 version: 1
 rules:
   - match: svc-api
-    type: service
-    service: api
     template: templates/svc.yaml
 `, map[string]string{"svc.yaml": minimalServiceTemplate})
 
@@ -137,7 +132,6 @@ func TestResolvePersonIdentity(t *testing.T) {
 version: 1
 rules:
   - match: "*"
-    type: person
     template: templates/person.yaml
 `, map[string]string{"person.yaml": minimalPersonTemplate})
 
@@ -151,9 +145,6 @@ rules:
 		t.Fatalf("Resolve: %v", err)
 	}
 
-	if id.Type != UserTypePerson {
-		t.Fatalf("expected type person, got %q", id.Type)
-	}
 	if id.UserID != "zitadel-user-123" {
 		t.Fatalf("the user id must be the token sub, got %q", id.UserID)
 	}
@@ -177,8 +168,6 @@ func TestResolveServiceIdentity(t *testing.T) {
 version: 1
 rules:
   - match: svc-jira
-    type: service
-    service: jira
     template: templates/svc.yaml
 `, map[string]string{"svc.yaml": minimalServiceTemplate})
 
@@ -192,29 +181,25 @@ rules:
 		t.Fatalf("Resolve: %v", err)
 	}
 
-	if id.Type != UserTypeService {
-		t.Fatalf("expected type service, got %q", id.Type)
+	// A backend is a Zitadel user like anyone else: its identity is its `sub`, exactly as a
+	// person's is. The endpoint it serves is a property of its TEMPLATE, written literally
+	// there, which is what lets several replicas share it while each connects as itself.
+	if id.UserID != "machine-user-9" {
+		t.Fatalf("expected userID=machine-user-9, got %q", id.UserID)
 	}
-	// A service user has BOTH things: its own user id (the `sub`, just like a person) and
-	// the name of the endpoint it serves. They are distinct axes.
-	if id.UserID != "machine-user-9" || id.Service != "jira" {
-		t.Fatalf("expected userID=machine-user-9 service=jira, got userID=%q service=%q", id.UserID, id.Service)
-	}
-	assertSubjects(t, "sub allow", perms.SubAllow, []string{"prod.*.jira.>"})
+	assertSubjects(t, "sub allow", perms.SubAllow, []string{"prod.*.api.>"})
 }
 
-// The identity model is decided by the RULE, not by the class of user in Zitadel.
+// Routing is decided by the ROLE, and by nothing else.
 //
-// A machine user whose role is declared `type: person` receives a person identity: with no
-// service name, so it cannot serve an endpoint. This is intentional — it lets the person
-// path be exercised without an interactive login — and it is what the log reports as
-// `identity=person`, which reads oddly next to a service user unless you know this.
-func TestIdentityModelComesFromTheRuleNotThePrincipal(t *testing.T) {
+// A Zitadel machine user carrying a role whose rule points at a person template receives that
+// template: the callout never inspects the class of user in the identity provider. This is
+// intentional — it is what lets the person path be exercised without an interactive login.
+func TestRoutingComesFromTheRoleNotThePrincipal(t *testing.T) {
 	rulesPath := writeRules(t, `
 version: 1
 rules:
   - match: app-user
-    type: person
     template: templates/person.yaml
 `, map[string]string{"person.yaml": minimalPersonTemplate})
 
@@ -223,20 +208,14 @@ rules:
 		t.Fatalf("NewRouterFromFile: %v", err)
 	}
 
-	// The `sub` belongs to a Zitadel machine user; the rule says person.
+	// The `sub` belongs to a Zitadel machine user; the rule routes it like any other role.
 	id, _, decision, err := router.Resolve([]string{"app-user"}, "100000000000000001", "app_user", nil)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 
-	if decision.IdentityModel != UserTypePerson || id.Type != UserTypePerson {
-		t.Fatalf("expected the person model, got decision=%q identity=%q", decision.IdentityModel, id.Type)
-	}
 	if id.UserID != "100000000000000001" {
 		t.Fatalf("the user id must be the token sub, got %q", id.UserID)
-	}
-	if id.Service != "" {
-		t.Fatalf("a person identity carries no service name, got %q", id.Service)
 	}
 	// The winning role has to be recorded: with several roles in the token, a log without it
 	// makes it impossible to tell why those permissions were granted.
@@ -291,48 +270,13 @@ func TestRouterRejectsBadConfig(t *testing.T) {
 		want  error
 	}{
 		{
-			name: "invalid type",
-			rules: `
-version: 1
-rules:
-  - match: x
-    type: robot
-    template: templates/person.yaml
-`,
-			want: ErrInvalidUserType,
-		},
-		{
 			name: "no template",
 			rules: `
 version: 1
 rules:
   - match: x
-    type: person
 `,
 			want: ErrEmptyTemplate,
-		},
-		{
-			name: "service without a name",
-			rules: `
-version: 1
-rules:
-  - match: svc-x
-    type: service
-    template: templates/svc.yaml
-`,
-			want: ErrServiceNameRequired,
-		},
-		{
-			name: "person with service",
-			rules: `
-version: 1
-rules:
-  - match: x
-    type: person
-    service: api
-    template: templates/person.yaml
-`,
-			want: ErrServiceNameOnPerson,
 		},
 	}
 
@@ -355,7 +299,6 @@ func TestRouterRejectsMissingTemplateFile(t *testing.T) {
 version: 1
 rules:
   - match: x
-    type: person
     template: templates/does-not-exist.yaml
 `, nil)
 
@@ -369,7 +312,6 @@ func TestRouterRejectsEmptyInstance(t *testing.T) {
 version: 1
 rules:
   - match: "*"
-    type: person
     template: templates/person.yaml
 `, map[string]string{"person.yaml": minimalPersonTemplate})
 
@@ -402,6 +344,9 @@ func TestShippedConfigIsValid(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Resolve(%v): %v", roles, err)
 			}
+			if id.UserID != "test-sub" {
+				t.Fatalf("%s: the identity must carry the token sub, got %q", decision.Template, id.UserID)
+			}
 			if len(perms.PubAllow) == 0 && len(perms.SubAllow) == 0 {
 				t.Fatalf("%s grants no permissions at all", decision.Template)
 			}
@@ -410,11 +355,6 @@ func TestShippedConfigIsValid(t *testing.T) {
 				if placeholderRE.MatchString(subject) {
 					t.Fatalf("%s left a placeholder unexpanded: %q", decision.Template, subject)
 				}
-			}
-			// A person must never receive a service's permissions or vice versa: isolation
-			// between user types depends on this.
-			if id.Type == UserTypePerson && id.Service != "" {
-				t.Fatalf("%s: a person must not have a service name", decision.Template)
 			}
 		})
 	}
@@ -489,9 +429,6 @@ func TestPersonTemplatesPublishOnlyUnderOwnUserID(t *testing.T) {
 		id, perms, decision, err := router.Resolve([]string{role}, "sub-"+role, role, nil)
 		if err != nil {
 			t.Fatalf("Resolve(%s): %v", role, err)
-		}
-		if id.Type != UserTypePerson {
-			t.Fatalf("%s: expected a person identity", decision.Template)
 		}
 		for _, subject := range perms.PubAllow {
 			// KV/JetStream subjects do not follow this grammar; skip them.

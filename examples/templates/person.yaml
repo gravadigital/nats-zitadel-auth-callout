@@ -4,14 +4,13 @@
 #   <instance>.<user-id>.<svc>.<method>
 #     instance   deployment (dev/stage/prod)
 #     user-id    WHO is calling: the token's `sub`, raw. Same for people and backends.
-#     svc        WHO it is talking to (here, `demo`)
+#     svc        WHO it is talking to (here, `demo`) — written literally in the template
 #     method     WHAT it is asking for
 #
 # PLACEHOLDERS
 #   {{instance}}      the deployment instance
 #   {{user_id}}       the token's `sub`, raw (note: UNDERSCORE, not `{{user-id}}`)
 #   {{user_id_hash}}  a stable hash of the user id — for the inbox prefix
-#   {{service}}       the endpoint name; only in service templates
 #
 # A deployment can declare more placeholders, sourced from token claims. See `placeholders:`
 # in the README.

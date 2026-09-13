@@ -43,7 +43,6 @@ sub:
 version: 1
 rules:
   - match: tester
-    type: person
     template: person.yaml
 `
 	rulesPath := filepath.Join(dir, "rules.yaml")

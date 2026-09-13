@@ -72,7 +72,6 @@ func run(args []string) error {
 	id := authz.Identity{
 		Instance: instance,
 		UserID:   subject,
-		Type:     authz.UserTypePerson,
 	}
 
 	fmt.Printf("user-id   %s\n", id.UserID)
