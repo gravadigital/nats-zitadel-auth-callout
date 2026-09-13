@@ -372,15 +372,12 @@ func (s *Service) handle(msg *nats.Msg) {
 	// The log has to make clear WHY this connection received these permissions:
 	//   roles      what the token carried
 	//   matchedBy  the winning role (with several roles, the log is ambiguous without it)
-	//   identity   the identity MODEL the rule applied (person/service), which is NOT the
-	//              class of user in Zitadel: a machine user with a role declared
-	//              `type: person` shows up as person, and that is correct.
+	//   template   the permission template that was expanded
 	s.log.Info().
 		Str("sub", claims.Subject).
 		Str("username", identity.Username).
 		Strs("roles", claims.Roles).
 		Str("matchedBy", decision.Rule).
-		Str("identity", string(decision.IdentityModel)).
 		// userId is the `sub`, so it is not repeated. The hash is logged because it is the
 		// client's inbox prefix and cannot be eyeballed from the rest of the log.
 		Str("inboxHash", authz.HashUserID(identity.UserID)).

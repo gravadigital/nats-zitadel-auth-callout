@@ -9,7 +9,7 @@ import (
 
 // probe is the identity a subject pattern is validated against at startup.
 func probe(instance string) authz.Identity {
-	return authz.Identity{Instance: instance, UserID: "probe", Service: "probe"}
+	return authz.Identity{Instance: instance, UserID: "probe"}
 }
 
 func TestProbeSubjectExpandsThePattern(t *testing.T) {
@@ -30,13 +30,6 @@ func TestProbeSubjectRejectsWhatCannotWork(t *testing.T) {
 		// than just non-nil.
 		wantIn string
 	}{
-		{
-			// The events subject is expanded for EVERY authenticated connection, and `service` is
-			// empty for a person: the subject would have an empty segment for every human being.
-			name:    "service placeholder",
-			pattern: "{{instance}}.events.{{service}}",
-			wantIn:  "{{service}}",
-		},
 		{
 			name:    "unknown placeholder",
 			pattern: "{{instance}}.events.{{tenant}}",

@@ -33,8 +33,8 @@ func ExpandSubject(pattern string, id Identity) (string, error) {
 
 // SubjectPlaceholders lists the placeholder names pattern references, without expanding it.
 //
-// It exists so a caller can refuse a pattern whose placeholders it cannot honour for every
-// identity — `{{service}}` is empty for people — at startup rather than per event.
+// It exists so a caller can inspect a pattern's placeholders — to refuse one it cannot honour
+// for every identity — at startup rather than per event.
 func SubjectPlaceholders(pattern string) []string {
 	referenced := referencedPlaceholders([]byte(pattern))
 	names := make([]string, 0, len(referenced))

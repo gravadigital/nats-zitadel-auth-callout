@@ -7,11 +7,11 @@ keep** — the roles and subjects here describe a made-up application.
 
 An application with a `demo` service and three kinds of caller:
 
-| Role | Identity | What it can do |
+| Role | Kind of caller | What it can do |
 |---|---|---|
 | `app-user` | person | two methods (`ping`, `echo`); in KV only its own keys |
 | `app-admin` | person | every method of `demo`; reads the whole bucket, writes only its own keys |
-| `app-backend` | service | serves the `demo` endpoint; owns the `user-settings` bucket |
+| `app-backend` | backend | serves the `demo` endpoint; owns the `user-settings` bucket |
 
 There is **no catch-all**, so a valid token whose role is not listed does not connect.
 

@@ -42,7 +42,6 @@ placeholders:
   region: region
 rules:
   - match: app-user
-    type: person
     template: app.yaml
 `
 	rulesPath := filepath.Join(dir, "rules.yaml")
@@ -144,7 +143,6 @@ placeholders:
   tenant: tenant_id
 rules:
   - match: app-user
-    type: person
     template: app.yaml
 `), 0o600); err != nil {
 		t.Fatalf("write rules: %v", err)
@@ -206,7 +204,6 @@ placeholders:
   tenant: tenant_id
 rules:
   - match: app-user
-    type: person
     template: app.yaml
 `), 0o600); err != nil {
 		t.Fatalf("write rules: %v", err)

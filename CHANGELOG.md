@@ -44,6 +44,27 @@ under **Changed** with what a deployment has to do.
 
 ### Changed
 
+- **BREAKING: `type` and `service` are gone from `rules.yaml`, and `{{service}}` is no longer a
+  placeholder.** A rule is now only `match` plus `template`.
+
+  Neither field decided anything. Routing has always been by role alone, and `type` existed to
+  gate `service`, whose only job was to feed `{{service}}` — a value that came from the rule
+  itself, not from the authenticated identity, so a template could always write it literally.
+  Every built-in placeholder now describes the connection that authenticated, which is the
+  property that makes them safe to substitute into a permission subject.
+
+  **To migrate:** in each template, replace `{{service}}` with the endpoint name written out
+  (`{{instance}}.*.{{service}}.>` becomes `{{instance}}.*.orders.>`), then delete the `type:` and
+  `service:` lines from `rules.yaml`. Both files are parsed strictly, so a leftover key fails at
+  startup naming the line rather than being ignored.
+
+  Two consequences worth knowing. `service` is now an ordinary placeholder name, so a deployment
+  whose tokens carry a `service` claim may declare it under `placeholders:`. And the
+  authentication event drops `identity_type`, which reported the rule's `type` rather than
+  anything about the principal — **`version` is now `2`**; a consumer that needs the distinction
+  derives it from `matched_role`, which is a verified fact about the token. The callout's
+  per-authentication log line drops the `identity` field for the same reason.
+
 - The userinfo endpoint now comes from the **OIDC discovery document** instead of a hardcoded
   `/oidc/v1/userinfo`, and its results are cached. A provider behind a path prefix stops being a
   special case. (#1, #2)

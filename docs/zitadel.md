@@ -49,8 +49,8 @@ For backend services, create a **service user** (*Users → Service Users → Ne
 > says so.
 
 Note that **the callout routes only by role**, never by Zitadel's class of user. A service user
-holding a role whose rule says `type: person` gets a person identity, and that is by design — it
-is what lets you exercise every path without a browser login.
+holding a role that points at a person template gets those permissions, and that is by design —
+it is what lets you exercise every path without a browser login.
 
 ### 1.4 Credentials for a service user
 

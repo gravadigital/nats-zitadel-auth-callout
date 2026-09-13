@@ -22,7 +22,6 @@ func sampleAuthentication() Authentication {
 			Instance: "prod",
 			UserID:   "281234567890123456",
 			Username: "ana@example.com",
-			Type:     authz.UserTypePerson,
 		},
 		Claims: &idp.Claims{
 			Subject:  "281234567890123456",
@@ -36,9 +35,8 @@ func sampleAuthentication() Authentication {
 		Decision: authz.Decision{
 			Rule: "app-user",
 			// The resolved path is what a log carries; the event carries the declared one.
-			Template:      "/etc/auth-callout/templates/person.yaml",
-			TemplateRef:   "templates/person.yaml",
-			IdentityModel: authz.UserTypePerson,
+			Template:    "/etc/auth-callout/templates/person.yaml",
+			TemplateRef: "templates/person.yaml",
 		},
 		ClientIP:  "10.1.2.3",
 		Session:   "UAWUJEWODGQJGMUGZBJH4Y6XKTVD5V4G5EQZXUJA5QV3ZL2TP2JY3ZNH",
@@ -60,7 +58,7 @@ func TestEventPayloadCarriesEveryDocumentedField(t *testing.T) {
 
 	want := map[string]any{
 		"type":             "authenticated",
-		"version":          float64(1),
+		"version":          float64(2),
 		"id":               "281234567890123456",
 		"name":             "Ana Pérez",
 		"username":         "ana@example.com",
@@ -68,7 +66,6 @@ func TestEventPayloadCarriesEveryDocumentedField(t *testing.T) {
 		"authenticated_at": "2026-08-23T18:04:11Z",
 		"expires_at":       "2026-08-23T19:04:11Z",
 		"instance":         "prod",
-		"identity_type":    "person",
 		"matched_role":     "app-user",
 		"template":         "templates/person.yaml",
 		"client_ip":        "10.1.2.3",

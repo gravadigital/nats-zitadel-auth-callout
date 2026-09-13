@@ -27,29 +27,31 @@ role to a template, first match wins in file order:
 ```yaml
 rules:
   - match: app-admin
-    type: person
     template: templates/admin.yaml
 
   - match: app-backend
-    type: service
-    service: orders          # the endpoint name this identity serves
     template: templates/orders.yaml
 ```
 
 With no match the connection is **refused**. There are no default permissions.
 
-`type` decides how the identity is assembled, not how trustworthy it is:
+A rule is only those two things. The identity is always the token's subject, for a person and
+for a machine user alike — both are users of the identity provider — so there is no identity
+model to declare and nothing about the client is inferred.
 
-| `type` | What it means |
-|---|---|
-| `person` | the identity is the token's subject |
-| `service` | the same, plus an **endpoint name** declared in the rule |
+A machine user holding a role that points at a person template gets those permissions, which is
+deliberate: it is what lets you exercise every path without a browser login.
 
-A machine user holding a role whose rule says `type: person` gets a person identity — which is
-deliberate, and is what lets you exercise every path without a browser login.
+What a backend additionally has is an **endpoint** it serves, and that is written literally in
+its template:
 
-The endpoint name being separate from the user id is what lets several replicas of a service
-serve the same endpoint (queue-group balancing) while each connects as itself.
+```yaml
+sub:
+  allow: ["{{instance}}.*.orders.>"]   # any caller's user id, this backend's endpoint
+```
+
+Keeping the endpoint out of the identity is what lets several replicas serve the same endpoint
+(queue-group balancing) while each connects as itself.
 
 ## What the service gives you, and what you decide
 
@@ -62,7 +64,6 @@ The values available:
 |---|---|
 | `{{user_id}}` | the token's `sub`, verbatim |
 | `{{user_id_hash}}` | a stable, subject-safe hash of it — for inbox prefixes |
-| `{{service}}` | the endpoint name, for `type: service` rules |
 | `{{instance}}` | a deployment label, if you configure one. Optional |
 
 Plus anything you declare from token claims:

@@ -4,8 +4,9 @@
 #
 # IDENTITY AND ENDPOINT ARE DIFFERENT THINGS
 #   A backend connects as a user of the identity provider like anyone else: it has its own
-#   `sub`, and that is its {{user_id}}. What makes it a service is additionally having an
-#   endpoint NAME ({{service}} == "demo"), declared in the rule, which is how it gets called.
+#   `sub`, and that is its {{user_id}}. What makes it a service is the endpoint it serves —
+#   `demo` — which is written LITERALLY below, because it describes the subject grammar, not
+#   the identity that authenticated.
 #
 #   The practical consequence: several replicas share the endpoint — that is what lets NATS
 #   balance with queue groups — while each connects with its own user id.
@@ -25,7 +26,7 @@ pub:
 sub:
   allow:
     # Serve the requests aimed at its endpoint, from any caller.
-    - "{{instance}}.*.{{service}}.>"
+    - "{{instance}}.*.demo.>"
     # Its own inbox (replies from services it calls), under the hash of its user id just like a
     # person. It is PER REPLICA, not per endpoint: two replicas with different users do not
     # steal each other's replies.
