@@ -4,10 +4,66 @@ Notable changes to this project. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-While the project is pre-1.0, a minor version may contain breaking changes; they are called out
-under **Changed** with what a deployment has to do.
+Since 1.0 the public contract is the `rules.yaml` and template schema, the built-in placeholders
+and subject grammar, the authentication event payload, the `CALLOUT_*` variables and the CLI.
+A change that breaks any of them is a **major**, called out under **Changed** with what a
+deployment has to do.
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-09-13
+
+First stable release. The configuration surface is what it is meant to be, so it is now a
+contract: the `rules.yaml` and template schema, the built-in placeholders and the subject
+grammar, the authentication event payload, the `CALLOUT_*` variables and the CLI. Breaking any
+of them from here on takes a major version, and a removal is preceded by a deprecation that
+keeps working and warns.
+
+Nothing was added to get here — the opposite. This release removes the last piece of the rules
+schema that did not describe the authenticated identity, which is what the schema is now free to
+promise.
+
+### Changed
+
+- **BREAKING: `type` and `service` are gone from `rules.yaml`, and `{{service}}` is no longer a
+  placeholder.** A rule is now only `match` plus `template`.
+
+  Neither field decided anything a template could not say itself. `service` fed exactly one
+  consumer, the `{{service}}` placeholder, and its value came from the rule rather than from the
+  authenticated identity — so it was a constant a template could always have written literally,
+  unlike every other built-in, which describes the connection that authenticated. `type` existed
+  to gate `service`; it never reached template expansion or the minted User JWT, because routing
+  has always been by role alone.
+
+  **To migrate**, in this order:
+
+  1. In every template, replace `{{service}}` with the endpoint written out —
+     `"{{instance}}.*.{{service}}.>"` becomes `"{{instance}}.*.orders.>"`.
+  2. In `rules.yaml`, delete the `type:` and `service:` lines. A rule keeps only `match` and
+     `template`.
+
+  Both files are parsed strictly, so a leftover key **fails at startup naming the line**
+  (`line 22: field type not found in type authz.Rule`) rather than being ignored. A configuration
+  that no longer means what it says does not start.
+
+- **BREAKING: the authentication event drops `identity_type`, and its `version` is now `2`.** The
+  field reported the rule's `type`, which described what the YAML said rather than anything
+  verified about the principal. A consumer that needs the distinction derives it from
+  `matched_role`, which is a fact read from the token. The callout's per-authentication log line
+  drops the `identity` field for the same reason.
+
+- `service` is now an ordinary placeholder name. A deployment whose tokens carry a `service` claim
+  may declare it under `placeholders:` like any other.
+
+### Notes for existing installations
+
+Upgrading requires editing `rules.yaml` and any template using `{{service}}` — see the migration
+above. Nothing else changes: no new variables, and no change to either server mode.
+
+If you consume the authentication events, check whether anything reads `identity_type` before
+upgrading; the payload's `version` moves to `2`.
+
+## [0.2.0] - 2026-08-23
 
 ### Added
 
@@ -43,27 +99,6 @@ under **Changed** with what a deployment has to do.
   so no deployment changes by upgrading.
 
 ### Changed
-
-- **BREAKING: `type` and `service` are gone from `rules.yaml`, and `{{service}}` is no longer a
-  placeholder.** A rule is now only `match` plus `template`.
-
-  Neither field decided anything. Routing has always been by role alone, and `type` existed to
-  gate `service`, whose only job was to feed `{{service}}` — a value that came from the rule
-  itself, not from the authenticated identity, so a template could always write it literally.
-  Every built-in placeholder now describes the connection that authenticated, which is the
-  property that makes them safe to substitute into a permission subject.
-
-  **To migrate:** in each template, replace `{{service}}` with the endpoint name written out
-  (`{{instance}}.*.{{service}}.>` becomes `{{instance}}.*.orders.>`), then delete the `type:` and
-  `service:` lines from `rules.yaml`. Both files are parsed strictly, so a leftover key fails at
-  startup naming the line rather than being ignored.
-
-  Two consequences worth knowing. `service` is now an ordinary placeholder name, so a deployment
-  whose tokens carry a `service` claim may declare it under `placeholders:`. And the
-  authentication event drops `identity_type`, which reported the rule's `type` rather than
-  anything about the principal — **`version` is now `2`**; a consumer that needs the distinction
-  derives it from `matched_role`, which is a verified fact about the token. The callout's
-  per-authentication log line drops the `identity` field for the same reason.
 
 - The userinfo endpoint now comes from the **OIDC discovery document** instead of a hardcoded
   `/oidc/v1/userinfo`, and its results are cached. A provider behind a path prefix stops being a
@@ -142,6 +177,8 @@ First public release.
   what the template describes — a `tenant` claim of `*` reaching every tenant, and in `kv.bucket`
   every KV bucket in the account. The same validation applies to the token's `sub`.
 
-[Unreleased]: https://github.com/gravadigital/nats-zitadel-auth-callout/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/gravadigital/nats-zitadel-auth-callout/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/gravadigital/nats-zitadel-auth-callout/compare/v0.2.0...v1.0.0
+[0.2.0]: https://github.com/gravadigital/nats-zitadel-auth-callout/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/gravadigital/nats-zitadel-auth-callout/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/gravadigital/nats-zitadel-auth-callout/releases/tag/v0.1.0

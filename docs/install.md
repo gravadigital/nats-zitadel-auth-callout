@@ -122,7 +122,7 @@ docker run --rm \
   -e CALLOUT_APP_ACCOUNT_SK_SEED=/etc/nats-creds/app.seed \
   -e CALLOUT_HANDLER_CREDS=/etc/nats-creds/handler.creds \
   -e CALLOUT_XKEY_SEED=/etc/nats-creds/xkey.seed \
-  gravadigital/nats-zitadel-auth-callout:0.1.0
+  gravadigital/nats-zitadel-auth-callout:1.0.0
 ```
 
 Everything except the secrets can live in the configuration file; see

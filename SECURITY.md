@@ -48,8 +48,8 @@ turns out to be intended behaviour than miss one that is not.
 
 ## Supported versions
 
-While this project is pre-1.0, fixes go onto the latest released minor version only. Once there
-is a 1.0, this section will say something more specific.
+Fixes go onto the **latest released minor version**. There are no long-term support branches:
+a deployment on an older minor upgrades to the current one to receive a fix.
 
 ## Handling
 

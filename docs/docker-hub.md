@@ -51,7 +51,7 @@ docker run --rm \
   -e CALLOUT_APP_ACCOUNT_SK_SEED=/etc/nats-creds/app.seed \
   -e CALLOUT_HANDLER_CREDS=/etc/nats-creds/handler.creds \
   -e CALLOUT_XKEY_SEED=/etc/nats-creds/xkey.seed \
-  gravadigital/nats-zitadel-auth-callout:0.1.0
+  gravadigital/nats-zitadel-auth-callout:1.0.0
 ```
 
 Two mount points exist in the image:
@@ -69,8 +69,8 @@ mounts both work unchanged.
 Useful commands:
 
 ```sh
-docker run --rm gravadigital/nats-zitadel-auth-callout:0.1.0 version
-docker run --rm ... gravadigital/nats-zitadel-auth-callout:0.1.0 verify --client-creds ...
+docker run --rm gravadigital/nats-zitadel-auth-callout:1.0.0 version
+docker run --rm ... gravadigital/nats-zitadel-auth-callout:1.0.0 verify --client-creds ...
 ```
 
 `verify` checks a deployment's wiring before it serves traffic — including whether clients bypass
@@ -81,11 +81,11 @@ service is stopped, and it exits non-zero on any problem, so it works as a deplo
 
 | Tag | What it tracks |
 |---|---|
-| `0.1.0` | an exact release. Use this in production |
-| `0.1` | the latest patch of that minor version |
+| `1.0.0` | an exact release. Use this in production |
+| `1.0` | the latest patch of that minor version |
 | `latest` | the newest stable release |
 
-Prereleases (`1.0.0-rc.1`) publish only their own tag and never move `latest`.
+Prereleases (`1.1.0-rc.1`) publish only their own tag and never move `latest`.
 
 Images are `linux/amd64`, built from the tagged commit, and every release is smoke-tested after
 publishing.

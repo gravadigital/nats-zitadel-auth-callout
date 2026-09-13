@@ -108,12 +108,14 @@ Requires Go 1.26+, `nsc` and `nats-server` on the PATH. The subjects above come 
 
 ## Status
 
-Pre-1.0. The mechanism is settled and covered by tests that stand up real `nats-server`
-instances in both authorization modes — every rule that decides whether a connection is accepted
-lives in the server, so that is where it is verified.
+Stable. The mechanism is covered by tests that stand up real `nats-server` instances in both
+authorization modes — every rule that decides whether a connection is accepted lives in the
+server, so that is where it is verified.
 
-What may still change before 1.0 is the shape of configuration. Anything that does will be in
-the [changelog](CHANGELOG.md) with what a deployment has to do about it.
+Since 1.0 the configuration surface is a contract: the `rules.yaml` and template schema, the
+built-in placeholders and subject grammar, the authentication event payload, the `CALLOUT_*`
+variables and the CLI. Breaking any of them takes a major version, and a removal is preceded by
+a deprecation that keeps working and warns. See the [changelog](CHANGELOG.md).
 
 Known gaps: no metrics or health endpoint; a revoked token stays valid until it expires, since
 verification is local with no introspection per connection.
@@ -121,7 +123,7 @@ verification is local with no introspection per connection.
 ## Installing
 
 ```sh
-docker pull gravadigital/nats-zitadel-auth-callout:0.1.0
+docker pull gravadigital/nats-zitadel-auth-callout:1.0.0
 ```
 
 Tags are `MAJOR.MINOR.PATCH`, plus a rolling `MAJOR.MINOR`, plus `latest` on the newest stable
